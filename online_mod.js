@@ -10527,17 +10527,9 @@
       var extract = {};
       var object = _object;
       var select_title = '';
-      var prox = component.proxy('animewost');
       var host = 'https://v13.vost.pw';
-      var ref = host + '/';
-      var user_agent = Utils.baseUserAgent();
-      var prox_enc = '';
-
-      if (prox) {
-        prox_enc += 'param/Origin=' + encodeURIComponent(host) + '/';
-        prox_enc += 'param/Referer=' + encodeURIComponent(ref) + '/';
-        prox_enc += 'param/User-Agent=' + encodeURIComponent(user_agent) + '/';
-      }
+      var prox = Lampa.Storage.field('online_mod_proxy_animewost') === true;
+      var proxy_host = 'https://api.codetabs.com/v1/proxy?quest=';
 
       var filter_items = {};
       var choice = {};
@@ -10631,14 +10623,14 @@
           } else component.emptyForQuery(select_title);
         };
 
-        var postdata = 'do=search&subaction=search&story=' + encodeURIComponent(select_title);
+        var url = host + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(select_title);
         network.clear();
         network.timeout(1000 * 20);
-        network["native"](component.proxyLink(host + '/index.php', prox, prox_enc, 'enc2t'), function (str) {
+        network["native"](pageLink(url), function (str) {
           display(parseSearchItems(str || ''));
         }, function (a, c) {
           component.empty(network.errorDecode(a, c));
-        }, postdata, {
+        }, false, {
           dataType: 'text'
         });
       };
@@ -10678,6 +10670,10 @@
         if (!quality && /\/720\//.test(url)) quality = 720;
         if (!quality && /\/480\//.test(url)) quality = 480;
         return quality ? quality + 'p' : (label || 'MP4');
+      }
+
+      function pageLink(url) {
+        return prox ? proxy_host + encodeURIComponent(url) : url;
       }
 
       function parseSearchItems(str) {
@@ -10720,7 +10716,7 @@
       function getEpisodes(json) {
         network.clear();
         network.timeout(1000 * 20);
-        network["native"](component.proxyLink(json.link, prox, prox_enc, 'enc2t'), function (str) {
+        network["native"](pageLink(json.link), function (str) {
           var episodes = parseEpisodes(str || '', json);
 
           if (episodes.length) {
@@ -10845,7 +10841,7 @@
         var url = host + '/frame5.php?play=' + encodeURIComponent(element.id) + '&old=1';
         network.clear();
         network.timeout(1000 * 20);
-        network["native"](component.proxyLink(url, prox, prox_enc, 'enc2t'), function (str) {
+        network["native"](pageLink(url), function (str) {
           var items = parseFrameItems(str || '');
           var file = '';
           var quality = false;
