@@ -10528,6 +10528,7 @@
       var object = _object;
       var select_title = '';
       var host = 'https://v13.vost.pw';
+      var api_host = 'https://api.animetop.info/v1/';
       var prox = Lampa.Storage.field('online_mod_proxy_animewost') === true;
       var proxy_host = 'https://api.codetabs.com/v1/proxy?quest=';
 
@@ -10623,15 +10624,19 @@
           } else component.emptyForQuery(select_title);
         };
 
-        var url = host + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(select_title);
-        network.clear();
-        network.timeout(1000 * 20);
-        network["native"](pageLink(url), function (str) {
-          display(parseSearchItems(str || ''));
-        }, function (a, c) {
-          component.empty(network.errorDecode(a, c));
-        }, false, {
-          dataType: 'text'
+        apiMethod('search', 'name=' + encodeURIComponent(select_title), function (json) {
+          display(parseApiItems(json && json.data || []));
+        }, function () {
+          var url = host + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(select_title);
+          network.clear();
+          network.timeout(1000 * 20);
+          network["native"](pageLink(url), function (str) {
+            display(parseSearchItems(str || ''));
+          }, function (a, c) {
+            component.empty(network.errorDecode(a, c));
+          }, false, {
+            dataType: 'text'
+          });
         });
       };
 
@@ -10676,6 +10681,53 @@
         return prox ? proxy_host + encodeURIComponent(url) : url;
       }
 
+      function parseJson(json) {
+        if (typeof json !== 'string') return json;
+
+        try {
+          return JSON.parse(json);
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function apiMethod(method, postdata, call, error) {
+        network.clear();
+        network.timeout(1000 * 20);
+        network["native"](api_host + method, function (json) {
+          json = parseJson(json);
+
+          if (json && (!json.state || json.state.status === 'ok')) {
+            call(json);
+          } else {
+            error();
+          }
+        }, function () {
+          error();
+        }, postdata || '');
+      }
+
+      function parseApiItems(data) {
+        var items = [];
+        if (!data || !data.forEach) return items;
+        data.forEach(function (item) {
+          var title = stripTags(item.title || '');
+          var clean_title = title.replace(/\s*\[[^\]]+\]\s*$/, '').trim();
+          var parts = clean_title.split(/\s+\/\s+/);
+          var episodes_count = parseInt((title.match(/\[(?:\d+\s*-\s*)?(\d+)/) || [])[1] || 0);
+          items.push({
+            id: item.id,
+            title: parts[0] || clean_title || title,
+            orig_title: parts[1] || clean_title || title,
+            full_title: clean_title || title,
+            year: parseInt(item.year || 0),
+            episodes_count: episodes_count,
+            api: true
+          });
+        });
+        return items;
+      }
+
       function parseSearchItems(str) {
         var items = [];
         var matches = [];
@@ -10714,6 +10766,21 @@
       }
 
       function getEpisodes(json) {
+        if (json.api && json.id) {
+          return apiMethod('playlist', 'id=' + encodeURIComponent(json.id), function (data) {
+            var episodes = parsePlaylistEpisodes(data || [], json);
+
+            if (episodes.length) {
+              success({
+                card: json,
+                episodes: episodes
+              });
+            } else component.emptyForQuery(select_title);
+          }, function () {
+            component.emptyForQuery(select_title);
+          });
+        }
+
         network.clear();
         network.timeout(1000 * 20);
         network["native"](pageLink(json.link), function (str) {
@@ -10765,6 +10832,55 @@
           return (a.episode || 0) - (b.episode || 0);
         });
         return episodes;
+      }
+
+      function parsePlaylistEpisodes(data, card) {
+        var episodes = [];
+        data = parseJson(data);
+        if (!data || !data.forEach) return episodes;
+        data.forEach(function (item, index) {
+          var files = parsePlaylistFiles(item);
+          if (!files.length) return;
+          var num = parseFloat(((item.name || '').match(/(\d+(?:\.\d+)?)/) || [])[1] || 0);
+          var serial = num || data.length > 1;
+          var quality = files.map(function (file) {
+            return file.label;
+          }).reverse().join(' ~ ');
+          var episode = {
+            id: String(item.std || item.hd || index),
+            title: serial ? component.formatEpisodeTitle(null, num || index + 1) : card.title || select_title,
+            orig_title: card.orig_title || card.title || select_title,
+            quality: quality || 'MP4',
+            info: ' / AnimeWost',
+            files: files
+          };
+
+          if (serial) {
+            episode.season = 1;
+            episode.episode = num || index + 1;
+          }
+
+          episodes.push(episode);
+        });
+        episodes.sort(function (a, b) {
+          return (a.episode || 0) - (b.episode || 0);
+        });
+        return episodes;
+      }
+
+      function parsePlaylistFiles(item) {
+        var files = [];
+        if (item.hd) files.push(makeFile('720p', item.hd));
+        if (item.std) files.push(makeFile('480p', item.std));
+        return sortFiles(files);
+      }
+
+      function makeFile(label, url) {
+        return {
+          label: label,
+          quality: parseInt((label.match(/(\d{3,4})/) || [])[1] || 0),
+          file: component.proxyStream(url, 'animewost')
+        };
       }
 
       function success(json) {
@@ -10820,6 +10936,10 @@
           }
         }
 
+        return sortFiles(files);
+      }
+
+      function sortFiles(files) {
         files = files.filter(function (item, index) {
           return item.file && !files.some(function (test, i) {
             return i < index && test.label === item.label;
@@ -10837,6 +10957,16 @@
 
       function getStream(element, call, error) {
         if (element.stream) return call(element);
+        if (element.files && element.files.length) {
+          var quality = {};
+          element.files.forEach(function (item) {
+            quality[item.label] = item.file;
+          });
+          element.stream = element.files[0].file;
+          element.qualitys = quality;
+          element.quality = element.files[0].label;
+          return call(element);
+        }
         if (!element.id) return error();
         var url = host + '/frame5.php?play=' + encodeURIComponent(element.id) + '&old=1';
         network.clear();
