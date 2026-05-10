@@ -10965,43 +10965,35 @@
         return files;
       }
 
+      function applyFiles(element, items) {
+        var quality = {};
+        items.forEach(function (item) {
+          quality[item.label] = item.file;
+        });
+        element.stream = items[0].file;
+        element.qualitys = quality;
+        element.quality = items[0].label;
+        return element;
+      }
+
       function getStream(element, call, error) {
         if (element.stream) return call(element);
-        if (element.files && element.files.length) {
-          var quality = {};
-          element.files.forEach(function (item) {
-            quality[item.label] = item.file;
-          });
-          element.stream = element.files[0].file;
-          element.qualitys = quality;
-          element.quality = element.files[0].label;
-          return call(element);
-        }
-        if (!element.id) return error();
+        var fallback = function fallback() {
+          if (element.files && element.files.length) return call(applyFiles(element, element.files));
+          error();
+        };
+        if (!element.id) return fallback();
         var url = host + '/frame5.php?play=' + encodeURIComponent(element.id) + '&old=1';
         network.clear();
         network.timeout(1000 * 20);
         network["native"](pageLink(url), function (str) {
           var items = parseFrameItems(str || '');
-          var file = '';
-          var quality = false;
 
           if (items.length) {
-            file = items[0].file;
-            quality = {};
-            items.forEach(function (item) {
-              quality[item.label] = item.file;
-            });
-          }
-
-          if (file) {
-            element.stream = file;
-            element.qualitys = quality;
-            element.quality = items[0].label;
-            call(element);
-          } else error();
+            call(applyFiles(element, items));
+          } else fallback();
         }, function (a, c) {
-          error();
+          fallback();
         }, false, {
           dataType: 'text'
         });
