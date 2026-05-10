@@ -10677,6 +10677,10 @@
         return quality ? quality + 'p' : (label || 'MP4');
       }
 
+      function normalizeStreamUrl(url) {
+        return (url || '').replace(/^http:\/\/video\.animetop\.info\//, 'https://video.animetop.info/');
+      }
+
       function pageLink(url) {
         return prox ? proxy_host + encodeURIComponent(url) : url;
       }
@@ -10847,7 +10851,7 @@
             return file.label;
           }).reverse().join(' ~ ');
           var episode = {
-            id: String(item.std || item.hd || index),
+            id: playlistEpisodeId(item, index),
             title: serial ? component.formatEpisodeTitle(null, num || index + 1) : card.title || select_title,
             orig_title: card.orig_title || card.title || select_title,
             quality: quality || 'MP4',
@@ -10868,6 +10872,12 @@
         return episodes;
       }
 
+      function playlistEpisodeId(item, index) {
+        var url = item.std || item.hd || '';
+        var found = (url.match(/\/(\d+)\.mp4(?:\?|$)/) || [])[1];
+        return String(found || item.id || index);
+      }
+
       function parsePlaylistFiles(item) {
         var files = [];
         if (item.hd) files.push(makeFile('720p', item.hd));
@@ -10879,7 +10889,7 @@
         return {
           label: label,
           quality: parseInt((label.match(/(\d{3,4})/) || [])[1] || 0),
-          file: component.proxyStream(url, 'animewost')
+          file: component.proxyStream(normalizeStreamUrl(url), 'animewost')
         };
       }
 
@@ -10917,7 +10927,7 @@
             files.push({
               label: label,
               quality: parseInt((label.match(/(\d{3,4})/) || [])[1] || 0),
-              file: component.proxyStream(url, 'animewost')
+              file: component.proxyStream(normalizeStreamUrl(url), 'animewost')
             });
           });
         }
@@ -10931,7 +10941,7 @@
             files.push({
               label: label,
               quality: parseInt((label.match(/(\d{3,4})/) || [])[1] || 0),
-              file: component.proxyStream(url, 'animewost')
+              file: component.proxyStream(normalizeStreamUrl(url), 'animewost')
             });
           }
         }
