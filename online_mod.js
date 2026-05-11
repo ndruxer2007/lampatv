@@ -10681,6 +10681,10 @@
         return (url || '').replace(/^http:\/\/video\.animetop\.info\//, 'https://video.animetop.info/');
       }
 
+      function isTizenDevice() {
+        return (navigator.userAgent || '').toLowerCase().indexOf('tizen') !== -1;
+      }
+
       function pageLink(url) {
         return prox ? proxy_host + encodeURIComponent(url) : url;
       }
@@ -10893,6 +10897,36 @@
         };
       }
 
+      function selectFrameLink(label, links) {
+        var quality = parseInt(((label || '').match(/(\d{3,4})/) || [])[1] || 0);
+        var urls = (links || []).map(function (link) {
+          return normalizeStreamUrl(link);
+        }).filter(function (link, index) {
+          return link && !(links || []).some(function (test, i) {
+            return i < index && test === link;
+          });
+        });
+        if (!urls.length) return '';
+
+        urls.sort(function (a, b) {
+          var a_score = frameLinkScore(a, quality);
+          var b_score = frameLinkScore(b, quality);
+          if (b_score > a_score) return 1;
+          if (b_score < a_score) return -1;
+          return 0;
+        });
+
+        return urls[0];
+      }
+
+      function frameLinkScore(link, quality) {
+        var score = 0;
+        if (link.indexOf('&ip=') === -1) score += 5;
+        if (quality === 480 && /\.tigerlips\.org\//.test(link)) score += 40;
+        if (quality === 480 && /\/\/miniru\.trn\.su\//.test(link)) score -= 40;
+        return score;
+      }
+
       function success(json) {
         component.loading(false);
         extract = json;
@@ -10921,7 +10955,7 @@
 
         if (file) {
           component.parsePlaylist(component.decodeHtml(file.replace(/\\\//g, '/'))).forEach(function (item) {
-            var url = item.links && item.links[0] || '';
+            var url = selectFrameLink(item.label, item.links);
             if (!url) return;
             var label = normalizeLabel(item.label, url);
             files.push({
@@ -10982,6 +11016,7 @@
           if (element.files && element.files.length) return call(applyFiles(element, element.files));
           error();
         };
+        if (isTizenDevice() && element.files && element.files.length) return fallback();
         if (!element.id) return fallback();
         var url = host + '/frame5.php?play=' + encodeURIComponent(element.id) + '&old=1';
         network.clear();
