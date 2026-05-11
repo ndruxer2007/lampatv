@@ -11010,6 +11010,29 @@
         return element;
       }
 
+      function mergeFrameAndPlaylistFiles(frameItems, playlistItems) {
+        var files = [];
+        var playlist_480 = findQualityFile(playlistItems, 480);
+
+        frameItems.forEach(function (item) {
+          files.push(item.quality === 480 && playlist_480 ? playlist_480 : item);
+        });
+
+        (playlistItems || []).forEach(function (item) {
+          if (!files.some(function (file) {
+            return file.label === item.label;
+          })) files.push(item);
+        });
+
+        return sortFiles(files);
+      }
+
+      function findQualityFile(items, quality) {
+        return (items || []).filter(function (item) {
+          return item.quality === quality || item.label === quality + 'p';
+        })[0];
+      }
+
       function getStream(element, call, error) {
         if (element.stream) return call(element);
         var fallback = function fallback() {
@@ -11025,7 +11048,7 @@
           var items = parseFrameItems(str || '');
 
           if (items.length) {
-            call(applyFiles(element, items));
+            call(applyFiles(element, mergeFrameAndPlaylistFiles(items, element.files)));
           } else fallback();
         }, function (a, c) {
           fallback();
