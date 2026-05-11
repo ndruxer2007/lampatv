@@ -10885,7 +10885,6 @@
       function parsePlaylistFiles(item) {
         var files = [];
         if (item.hd) files.push(makeFile('720p', item.hd));
-        if (item.std) files.push(makeFile('480p', item.std));
         return sortFiles(files);
       }
 
@@ -10922,8 +10921,6 @@
       function frameLinkScore(link, quality) {
         var score = 0;
         if (link.indexOf('&ip=') === -1) score += 5;
-        if (quality === 480 && /\.tigerlips\.org\//.test(link)) score += 40;
-        if (quality === 480 && /\/\/miniru\.trn\.su\//.test(link)) score -= 40;
         return score;
       }
 
@@ -10958,6 +10955,7 @@
             var url = selectFrameLink(item.label, item.links);
             if (!url) return;
             var label = normalizeLabel(item.label, url);
+            if (parseInt((label.match(/(\d{3,4})/) || [])[1] || 0) <= 480) return;
             files.push({
               label: label,
               quality: parseInt((label.match(/(\d{3,4})/) || [])[1] || 0),
@@ -10972,6 +10970,7 @@
           while ((match = re.exec(str)) !== null) {
             var url = component.decodeHtml(match[1]).replace(/&d=1$/, '');
             var label = normalizeLabel('', url);
+            if (parseInt((label.match(/(\d{3,4})/) || [])[1] || 0) <= 480) return;
             files.push({
               label: label,
               quality: parseInt((label.match(/(\d{3,4})/) || [])[1] || 0),
@@ -11010,29 +11009,6 @@
         return element;
       }
 
-      function mergeFrameAndPlaylistFiles(frameItems, playlistItems) {
-        var files = [];
-        var playlist_480 = findQualityFile(playlistItems, 480);
-
-        frameItems.forEach(function (item) {
-          files.push(item.quality === 480 && playlist_480 ? playlist_480 : item);
-        });
-
-        (playlistItems || []).forEach(function (item) {
-          if (!files.some(function (file) {
-            return file.label === item.label;
-          })) files.push(item);
-        });
-
-        return sortFiles(files);
-      }
-
-      function findQualityFile(items, quality) {
-        return (items || []).filter(function (item) {
-          return item.quality === quality || item.label === quality + 'p';
-        })[0];
-      }
-
       function getStream(element, call, error) {
         if (element.stream) return call(element);
         var fallback = function fallback() {
@@ -11048,7 +11024,7 @@
           var items = parseFrameItems(str || '');
 
           if (items.length) {
-            call(applyFiles(element, mergeFrameAndPlaylistFiles(items, element.files)));
+            call(applyFiles(element, items));
           } else fallback();
         }, function (a, c) {
           fallback();
