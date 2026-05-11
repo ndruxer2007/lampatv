@@ -14020,7 +14020,7 @@
       };
     }
 
-    var mod_version = '01.05.2026';
+    var mod_version = '11.05.2026';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
