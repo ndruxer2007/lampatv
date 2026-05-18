@@ -10730,6 +10730,7 @@
             full_title: clean_title || title,
             year: parseInt(item.year || 0),
             episodes_count: episodes_count,
+            series: item.series,
             api: true
           });
         });
@@ -10783,9 +10784,9 @@
                 card: json,
                 episodes: episodes
               });
-            } else component.emptyForQuery(select_title);
+            } else fallbackApiSeries(json);
           }, function () {
-            component.emptyForQuery(select_title);
+            fallbackApiSeries(json);
           });
         }
 
@@ -10805,6 +10806,17 @@
         }, false, {
           dataType: 'text'
         });
+      }
+
+      function fallbackApiSeries(card) {
+        var episodes = parseApiSeriesEpisodes(card);
+
+        if (episodes.length) {
+          success({
+            card: card,
+            episodes: episodes
+          });
+        } else component.emptyForQuery(select_title);
       }
 
       function parseEpisodes(str, card) {
@@ -10874,6 +10886,68 @@
           return (a.episode || 0) - (b.episode || 0);
         });
         return episodes;
+      }
+
+      function parseApiSeriesEpisodes(card) {
+        var episodes = [];
+        var series = parseApiSeries(card && card.series);
+        if (!series.length) return episodes;
+        series.forEach(function (item, index) {
+          var id = item.id;
+          if (!id) return;
+          var files = sortFiles([makeFile('720p', 'http://video.animetop.info/720/' + id + '.mp4')]);
+          if (!files.length) return;
+          var num = item.episode || index + 1;
+          episodes.push({
+            id: id,
+            title: component.formatEpisodeTitle(null, num),
+            orig_title: card.orig_title || card.title || select_title,
+            quality: files.map(function (file) {
+              return file.label;
+            }).join(' ~ ') || 'MP4',
+            info: ' / AnimeWost',
+            season: 1,
+            episode: num,
+            files: files
+          });
+        });
+        episodes.sort(function (a, b) {
+          return (a.episode || 0) - (b.episode || 0);
+        });
+        return episodes;
+      }
+
+      function parseApiSeries(series) {
+        var items = [];
+        var match;
+
+        if (!series) return items;
+
+        if (typeof series === 'object') {
+          Object.keys(series).forEach(function (key) {
+            var id = String(series[key] || '').match(/\d+/);
+            var episode = parseFloat((key.match(/(\d+(?:\.\d+)?)/) || [])[1] || 0);
+            if (id) items.push({
+              episode: episode,
+              id: id[0]
+            });
+          });
+        } else {
+          series = String(series);
+          var re = /['"]([^'"]+)['"]\s*:\s*['"]?(\d+)['"]?/g;
+
+          while ((match = re.exec(series)) !== null) {
+            items.push({
+              episode: parseFloat((match[1].match(/(\d+(?:\.\d+)?)/) || [])[1] || 0),
+              id: match[2]
+            });
+          }
+        }
+
+        items.sort(function (a, b) {
+          return (a.episode || 0) - (b.episode || 0);
+        });
+        return items;
       }
 
       function playlistEpisodeId(item, index) {
@@ -14020,7 +14094,7 @@
       };
     }
 
-    var mod_version = '11.05.2026';
+    var mod_version = '18.05.2026';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
