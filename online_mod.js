@@ -14114,7 +14114,7 @@
       };
     }
 
-    var mod_version = '02.07.2026';
+    var mod_version = '25.07.2026';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -14209,6 +14209,7 @@
       Lampa.Params.trigger('online_mod_prefer_dash', false);
       Lampa.Params.trigger('online_mod_collaps_lampa_player', false);
       Lampa.Params.trigger('online_mod_full_episode_title', false);
+      Lampa.Params.trigger('online_mod_player_tech_info', false);
       Lampa.Params.trigger('online_mod_av1_support', true);
       Lampa.Params.trigger('online_mod_save_last_balanser', false);
       Lampa.Params.trigger('online_mod_rezka2_fix_stream', false);
@@ -14453,6 +14454,13 @@
           be: 'Поўны фармат назвы серыі',
           en: 'Full episode title format',
           zh: '完整剧集标题格式'
+        },
+        online_mod_player_tech_info: {
+          ru: 'Техническая информация в плеере',
+          uk: 'Технічна інформація в плеєрі',
+          be: 'Тэхнічная інфармацыя ў плэеры',
+          en: 'Technical info in player',
+          zh: '播放器技术信息'
         },
         online_mod_av1_support: {
           ru: 'AV1 поддерживается',
@@ -15427,6 +15435,214 @@
       });
     } ///////Онлайн Мод/////////
 
+    function initPlayerTechInfo() {
+      var state = {
+        video: null,
+        panel: null,
+        timer: null,
+        wait_count: 0,
+        stall_count: 0,
+        last_time: 0,
+        last_buffer: 0,
+        last_clock: 0,
+        last_rate: 0
+      };
+
+      function enabled() {
+        return Lampa.Storage.field('online_mod_player_tech_info') === true || Lampa.Storage.get('online_mod_player_tech_info', 'false') === 'true';
+      }
+
+      function addStyle() {
+        if ($('#online-mod-player-tech-style').length) return;
+        $('body').append("<style id=\"online-mod-player-tech-style\">\n.online-mod-player-tech{position:absolute;right:1.2em;top:1.2em;z-index:30;pointer-events:none;background:rgba(0,0,0,.62);color:#fff;border-radius:.3em;padding:.55em .7em;font-size:.82em;line-height:1.35;min-width:15em;max-width:24em;text-align:left}.online-mod-player-tech__title{font-weight:700;margin-bottom:.2em}.online-mod-player-tech__row{display:flex;justify-content:space-between;gap:1em;white-space:nowrap}.online-mod-player-tech__label{opacity:.68}.online-mod-player-tech__value{text-align:right;overflow:hidden;text-overflow:ellipsis}.online-mod-player-tech--warn{background:rgba(90,39,21,.72)}@media screen and (max-width:480px){.online-mod-player-tech{right:.8em;top:.8em;font-size:.72em;min-width:12em;max-width:18em}}\n</style>");
+      }
+
+      function getVideo() {
+        var candidates = ['.player video', '.player-video video', '.video video', 'video'];
+
+        if (window.Lampa && Lampa.PlayerVideo) {
+          if (Lampa.PlayerVideo.video && Lampa.PlayerVideo.video.tagName) return Lampa.PlayerVideo.video;
+          if (Lampa.PlayerVideo.element && Lampa.PlayerVideo.element.tagName) return Lampa.PlayerVideo.element;
+        }
+
+        for (var i = 0; i < candidates.length; i++) {
+          var video = document.querySelector(candidates[i]);
+          if (video) return video;
+        }
+
+        return null;
+      }
+
+      function attachPanel() {
+        addStyle();
+
+        if (!state.panel) state.panel = $('<div class="online-mod-player-tech"></div>');
+
+        if (!state.panel.parent().length) {
+          var target = $('.player').first();
+          if (!target.length) target = $('.player-video').first();
+          if (!target.length) target = $('body');
+          target.append(state.panel);
+        }
+      }
+
+      function detachPanel() {
+        if (state.panel) state.panel.remove();
+      }
+
+      function getBufferEnd(video) {
+        var buffered = video.buffered;
+        var current = video.currentTime || 0;
+        var end = 0;
+
+        if (!buffered || !buffered.length) return 0;
+
+        for (var i = 0; i < buffered.length; i++) {
+          var start = buffered.start(i);
+          var finish = buffered.end(i);
+
+          if (current >= start && current <= finish) return finish;
+          if (finish > end) end = finish;
+        }
+
+        return end;
+      }
+
+      function formatTime(value) {
+        if (!isFinite(value) || value < 0) value = 0;
+        var min = Math.floor(value / 60);
+        var sec = Math.floor(value % 60);
+        return min + ':' + (sec < 10 ? '0' : '') + sec;
+      }
+
+      function getHost(url) {
+        if (!url) return '-';
+
+        try {
+          return new URL(url, window.location.href).host || '-';
+        } catch (e) {
+          return '-';
+        }
+      }
+
+      function getType(url) {
+        url = (url || '').split('?')[0].toLowerCase();
+        if (url.indexOf('.m3u8') !== -1) return 'HLS';
+        if (url.indexOf('.mpd') !== -1) return 'DASH';
+        if (url.indexOf('.mp4') !== -1) return 'MP4';
+        return '-';
+      }
+
+      function row(label, value) {
+        return '<div class="online-mod-player-tech__row"><span class="online-mod-player-tech__label">' + label + '</span><span class="online-mod-player-tech__value">' + value + '</span></div>';
+      }
+
+      function update() {
+        var video = state.video;
+        if (!enabled() || !video) {
+          stop();
+          return;
+        }
+
+        attachPanel();
+
+        var now = Date.now();
+        var current = video.currentTime || 0;
+        var duration = video.duration || 0;
+        var buffer_end = getBufferEnd(video);
+        var buffer_ahead = Math.max(0, buffer_end - current);
+        var dt = state.last_clock ? (now - state.last_clock) / 1000 : 0;
+        var loaded = 0;
+
+        if (dt > 0 && state.last_buffer) {
+          loaded = Math.max(0, buffer_ahead - state.last_buffer + Math.max(0, current - state.last_time));
+          state.last_rate = loaded / dt;
+        }
+
+        state.last_clock = now;
+        state.last_time = current;
+        state.last_buffer = buffer_ahead;
+
+        var size = video.videoWidth && video.videoHeight ? video.videoWidth + 'x' + video.videoHeight : '-';
+        var network_state = ['empty', 'idle', 'loading', 'no source'][video.networkState] || video.networkState || '-';
+        var ready_state = ['nothing', 'metadata', 'current', 'future', 'enough'][video.readyState] || video.readyState || '-';
+        var source = video.currentSrc || video.src || '';
+        var rate = state.last_rate ? '~' + state.last_rate.toFixed(1) + 'x' : '-';
+        var is_warn = buffer_ahead < 20 && video.networkState === 2;
+
+        state.panel.toggleClass('online-mod-player-tech--warn', is_warn);
+        state.panel.html('<div class="online-mod-player-tech__title">Online Mod Tech</div>' + row('Buffer', formatTime(buffer_ahead)) + row('Load', rate) + row('Time', formatTime(current) + (duration ? ' / ' + formatTime(duration) : '')) + row('Video', size) + row('Type', getType(source)) + row('Host', getHost(source)) + row('Net', network_state + ' / ' + ready_state) + row('Wait', state.wait_count + ' / ' + state.stall_count));
+      }
+
+      function bindVideo() {
+        stop();
+
+        if (!enabled()) return;
+
+        state.video = getVideo();
+        if (!state.video) return;
+
+        state.wait_count = 0;
+        state.stall_count = 0;
+        state.last_time = 0;
+        state.last_buffer = 0;
+        state.last_clock = 0;
+        state.last_rate = 0;
+
+        state.video.addEventListener('waiting', onWaiting);
+        state.video.addEventListener('stalled', onStalled);
+        state.video.addEventListener('error', update);
+        state.video.addEventListener('progress', update);
+        state.video.addEventListener('loadedmetadata', update);
+        state.video.addEventListener('loadeddata', update);
+        state.timer = setInterval(update, 1000);
+        update();
+      }
+
+      function onWaiting() {
+        state.wait_count++;
+        update();
+      }
+
+      function onStalled() {
+        state.stall_count++;
+        update();
+      }
+
+      function stop() {
+        if (state.timer) {
+          clearInterval(state.timer);
+          state.timer = null;
+        }
+
+        if (state.video) {
+          state.video.removeEventListener('waiting', onWaiting);
+          state.video.removeEventListener('stalled', onStalled);
+          state.video.removeEventListener('error', update);
+          state.video.removeEventListener('progress', update);
+          state.video.removeEventListener('loadedmetadata', update);
+          state.video.removeEventListener('loadeddata', update);
+          state.video = null;
+        }
+
+        detachPanel();
+      }
+
+      if (Lampa.Player && Lampa.Player.listener) {
+        Lampa.Player.listener.follow('ready', function () {
+          setTimeout(bindVideo, 500);
+        });
+        Lampa.Player.listener.follow('destroy', stop);
+      }
+
+      Lampa.Storage.listener.follow('change', function (e) {
+        if (e.name == 'online_mod_player_tech_info') {
+          if (enabled()) setTimeout(bindVideo, 100);
+          else stop();
+        }
+      });
+    }
+
 
     function addSettingsOnlineMod() {
       if (Lampa.Settings.main && Lampa.Settings.main() && !Lampa.Settings.main().render().find('[data-component="online_mod"]').length) {
@@ -15483,6 +15699,7 @@
       }
 
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_full_episode_title\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_full_episode_title}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
+      template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_player_tech_info\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_player_tech_info}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_save_last_balanser\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_save_last_balanser}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>\n        <div class=\"settings-param selector\" data-name=\"online_mod_clear_last_balanser\" data-static=\"true\">\n            <div class=\"settings-param__name\">#{online_mod_clear_last_balanser}</div>\n            <div class=\"settings-param__status\"></div>\n        </div>";
 
       if (Utils.isDebug()) {
@@ -15605,6 +15822,7 @@
       initMain();
       initFilmix();
       initSettings();
+      initPlayerTechInfo();
     }
 
     startPlugin();
