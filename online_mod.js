@@ -14114,7 +14114,7 @@
       };
     }
 
-    var mod_version = '26.07.2026.1';
+    var mod_version = '26.07.2026.2';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -15454,7 +15454,7 @@
 
       function addStyle() {
         if ($('#online-mod-player-tech-style').length) return;
-        $('body').append("<style id=\"online-mod-player-tech-style\">\n.online-mod-player-tech{position:absolute;right:1.2em;top:1.2em;z-index:30;pointer-events:none;background:rgba(0,0,0,.62);color:#fff;border-radius:.3em;padding:.55em .7em;font-size:.82em;line-height:1.35;min-width:15em;max-width:24em;text-align:left}.online-mod-player-tech__title{font-weight:700;margin-bottom:.2em}.online-mod-player-tech__row{display:flex;justify-content:space-between;gap:1em;white-space:nowrap}.online-mod-player-tech__label{opacity:.68}.online-mod-player-tech__value{text-align:right;overflow:hidden;text-overflow:ellipsis}.online-mod-player-tech--warn{background:rgba(90,39,21,.72)}@media screen and (max-width:480px){.online-mod-player-tech{right:.8em;top:.8em;font-size:.72em;min-width:12em;max-width:18em}}\n</style>");
+        $('body').append("<style id=\"online-mod-player-tech-style\">\n.online-mod-player-tech{display:inline;white-space:nowrap}.online-mod-player-tech:before{content:' • '}.online-mod-player-tech--warn{color:#ffd39b}@media screen and (max-width:480px){.online-mod-player-tech{white-space:normal}.online-mod-player-tech:before{content:' '}}\n</style>");
       }
 
       function getVideo() {
@@ -15473,17 +15473,34 @@
         return null;
       }
 
+      function getInfoTarget() {
+        var selectors = [
+          '.player-info .player-info__details',
+          '.player-info .player-info__line',
+          '.player-info .player-info__body',
+          '.player-info',
+          '.player-top .player-info__details',
+          '.player-top .player-info__line',
+          '.player-top'
+        ];
+
+        for (var i = 0; i < selectors.length; i++) {
+          var target = $(selectors[i]).first();
+          if (target.length && target.is(':visible')) return target;
+        }
+
+        return null;
+      }
+
       function attachPanel() {
         addStyle();
 
-        if (!state.panel) state.panel = $('<div class="online-mod-player-tech"></div>');
+        if (!state.panel) state.panel = $('<span class="online-mod-player-tech"></span>');
 
-        if (!state.panel.parent().length) {
-          var target = $('.player').first();
-          if (!target.length) target = $('.player-video').first();
-          if (!target.length) target = $('body');
-          target.append(state.panel);
-        }
+        var target = getInfoTarget();
+        if (!target) return false;
+        if (!state.panel.parent().is(target)) target.append(state.panel);
+        return true;
       }
 
       function controlsVisible() {
@@ -15524,35 +15541,6 @@
         return end;
       }
 
-      function formatTime(value) {
-        if (!isFinite(value) || value < 0) value = 0;
-        var min = Math.floor(value / 60);
-        var sec = Math.floor(value % 60);
-        return min + ':' + (sec < 10 ? '0' : '') + sec;
-      }
-
-      function getHost(url) {
-        if (!url) return '-';
-
-        try {
-          return new URL(url, window.location.href).host || '-';
-        } catch (e) {
-          return '-';
-        }
-      }
-
-      function getType(url) {
-        url = (url || '').split('?')[0].toLowerCase();
-        if (url.indexOf('.m3u8') !== -1) return 'HLS';
-        if (url.indexOf('.mpd') !== -1) return 'DASH';
-        if (url.indexOf('.mp4') !== -1) return 'MP4';
-        return '-';
-      }
-
-      function row(label, value) {
-        return '<div class="online-mod-player-tech__row"><span class="online-mod-player-tech__label">' + label + '</span><span class="online-mod-player-tech__value">' + value + '</span></div>';
-      }
-
       function update() {
         var video = state.video;
         if (!enabled() || !video) {
@@ -15560,7 +15548,10 @@
           return;
         }
 
-        attachPanel();
+        if (!attachPanel()) {
+          detachPanel();
+          return;
+        }
 
         if (!controlsVisible()) {
           state.panel.hide();
@@ -15571,7 +15562,6 @@
 
         var now = Date.now();
         var current = video.currentTime || 0;
-        var duration = video.duration || 0;
         var buffer_end = getBufferEnd(video);
         var buffer_ahead = Math.max(0, buffer_end - current);
         var dt = state.last_clock ? (now - state.last_clock) / 1000 : 0;
@@ -15586,15 +15576,11 @@
         state.last_time = current;
         state.last_buffer = buffer_ahead;
 
-        var size = video.videoWidth && video.videoHeight ? video.videoWidth + 'x' + video.videoHeight : '-';
-        var network_state = ['empty', 'idle', 'loading', 'no source'][video.networkState] || video.networkState || '-';
-        var ready_state = ['nothing', 'metadata', 'current', 'future', 'enough'][video.readyState] || video.readyState || '-';
-        var source = video.currentSrc || video.src || '';
         var rate = state.last_rate ? '~' + state.last_rate.toFixed(1) + 'x' : '-';
         var is_warn = buffer_ahead < 20 && video.networkState === 2;
 
         state.panel.toggleClass('online-mod-player-tech--warn', is_warn);
-        state.panel.html('<div class="online-mod-player-tech__title">Online Mod Tech</div>' + row('Buffer', formatTime(buffer_ahead)) + row('Load', rate) + row('Time', formatTime(current) + (duration ? ' / ' + formatTime(duration) : '')) + row('Video', size) + row('Type', getType(source)) + row('Host', getHost(source)) + row('Net', network_state + ' / ' + ready_state) + row('Wait', state.wait_count + ' / ' + state.stall_count));
+        state.panel.text('Загрузка ' + rate + ' • Буфер ' + Math.round(buffer_ahead) + ' с. • Ожид. ' + state.wait_count + '/' + state.stall_count);
       }
 
       function bindVideo() {
