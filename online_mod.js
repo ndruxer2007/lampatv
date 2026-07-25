@@ -14114,7 +14114,7 @@
       };
     }
 
-    var mod_version = '26.07.2026.2';
+    var mod_version = '26.07.2026.3';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -14209,7 +14209,6 @@
       Lampa.Params.trigger('online_mod_prefer_dash', false);
       Lampa.Params.trigger('online_mod_collaps_lampa_player', false);
       Lampa.Params.trigger('online_mod_full_episode_title', false);
-      Lampa.Params.trigger('online_mod_player_tech_info', false);
       Lampa.Params.trigger('online_mod_av1_support', true);
       Lampa.Params.trigger('online_mod_save_last_balanser', false);
       Lampa.Params.trigger('online_mod_rezka2_fix_stream', false);
@@ -14454,13 +14453,6 @@
           be: 'Поўны фармат назвы серыі',
           en: 'Full episode title format',
           zh: '完整剧集标题格式'
-        },
-        online_mod_player_tech_info: {
-          ru: 'Техническая информация в плеере',
-          uk: 'Технічна інформація в плеєрі',
-          be: 'Тэхнічная інфармацыя ў плэеры',
-          en: 'Technical info in player',
-          zh: '播放器技术信息'
         },
         online_mod_av1_support: {
           ru: 'AV1 поддерживается',
@@ -15435,224 +15427,6 @@
       });
     } ///////Онлайн Мод/////////
 
-    function initPlayerTechInfo() {
-      var state = {
-        video: null,
-        panel: null,
-        timer: null,
-        wait_count: 0,
-        stall_count: 0,
-        last_time: 0,
-        last_buffer: 0,
-        last_clock: 0,
-        last_rate: 0
-      };
-
-      function enabled() {
-        return Lampa.Storage.field('online_mod_player_tech_info') === true || Lampa.Storage.get('online_mod_player_tech_info', 'false') === 'true';
-      }
-
-      function addStyle() {
-        if ($('#online-mod-player-tech-style').length) return;
-        $('body').append("<style id=\"online-mod-player-tech-style\">\n.online-mod-player-tech{display:inline;white-space:nowrap}.online-mod-player-tech:before{content:' • '}.online-mod-player-tech--warn{color:#ffd39b}@media screen and (max-width:480px){.online-mod-player-tech{white-space:normal}.online-mod-player-tech:before{content:' '}}\n</style>");
-      }
-
-      function getVideo() {
-        var candidates = ['.player video', '.player-video video', '.video video', 'video'];
-
-        if (window.Lampa && Lampa.PlayerVideo) {
-          if (Lampa.PlayerVideo.video && Lampa.PlayerVideo.video.tagName) return Lampa.PlayerVideo.video;
-          if (Lampa.PlayerVideo.element && Lampa.PlayerVideo.element.tagName) return Lampa.PlayerVideo.element;
-        }
-
-        for (var i = 0; i < candidates.length; i++) {
-          var video = document.querySelector(candidates[i]);
-          if (video) return video;
-        }
-
-        return null;
-      }
-
-      function getInfoTarget() {
-        var selectors = [
-          '.player-info .player-info__details',
-          '.player-info .player-info__line',
-          '.player-info .player-info__body',
-          '.player-info',
-          '.player-top .player-info__details',
-          '.player-top .player-info__line',
-          '.player-top'
-        ];
-
-        for (var i = 0; i < selectors.length; i++) {
-          var target = $(selectors[i]).first();
-          if (target.length && target.is(':visible')) return target;
-        }
-
-        return null;
-      }
-
-      function attachPanel() {
-        addStyle();
-
-        if (!state.panel) state.panel = $('<span class="online-mod-player-tech"></span>');
-
-        var target = getInfoTarget();
-        if (!target) return false;
-        if (!state.panel.parent().is(target)) target.append(state.panel);
-        return true;
-      }
-
-      function controlsVisible() {
-        var controls = $('.player-panel, .player-top, .player-info, .player-video__panel, .player-panel__left, .player-panel__right');
-        var visible = false;
-
-        controls.each(function () {
-          var style = window.getComputedStyle(this);
-
-          if (style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity || 1) > 0.05 && this.offsetWidth && this.offsetHeight) {
-            visible = true;
-            return false;
-          }
-        });
-
-        return visible;
-      }
-
-      function detachPanel() {
-        if (state.panel) state.panel.remove();
-      }
-
-      function getBufferEnd(video) {
-        var buffered = video.buffered;
-        var current = video.currentTime || 0;
-        var end = 0;
-
-        if (!buffered || !buffered.length) return 0;
-
-        for (var i = 0; i < buffered.length; i++) {
-          var start = buffered.start(i);
-          var finish = buffered.end(i);
-
-          if (current >= start && current <= finish) return finish;
-          if (finish > end) end = finish;
-        }
-
-        return end;
-      }
-
-      function update() {
-        var video = state.video;
-        if (!enabled() || !video) {
-          stop();
-          return;
-        }
-
-        if (!attachPanel()) {
-          detachPanel();
-          return;
-        }
-
-        if (!controlsVisible()) {
-          state.panel.hide();
-          return;
-        }
-
-        state.panel.show();
-
-        var now = Date.now();
-        var current = video.currentTime || 0;
-        var buffer_end = getBufferEnd(video);
-        var buffer_ahead = Math.max(0, buffer_end - current);
-        var dt = state.last_clock ? (now - state.last_clock) / 1000 : 0;
-        var loaded = 0;
-
-        if (dt > 0 && state.last_buffer) {
-          loaded = Math.max(0, buffer_ahead - state.last_buffer + Math.max(0, current - state.last_time));
-          state.last_rate = loaded / dt;
-        }
-
-        state.last_clock = now;
-        state.last_time = current;
-        state.last_buffer = buffer_ahead;
-
-        var rate = state.last_rate ? '~' + state.last_rate.toFixed(1) + 'x' : '-';
-        var is_warn = buffer_ahead < 20 && video.networkState === 2;
-
-        state.panel.toggleClass('online-mod-player-tech--warn', is_warn);
-        state.panel.text('Загрузка ' + rate + ' • Буфер ' + Math.round(buffer_ahead) + ' с. • Ожид. ' + state.wait_count + '/' + state.stall_count);
-      }
-
-      function bindVideo() {
-        stop();
-
-        if (!enabled()) return;
-
-        state.video = getVideo();
-        if (!state.video) return;
-
-        state.wait_count = 0;
-        state.stall_count = 0;
-        state.last_time = 0;
-        state.last_buffer = 0;
-        state.last_clock = 0;
-        state.last_rate = 0;
-
-        state.video.addEventListener('waiting', onWaiting);
-        state.video.addEventListener('stalled', onStalled);
-        state.video.addEventListener('error', update);
-        state.video.addEventListener('progress', update);
-        state.video.addEventListener('loadedmetadata', update);
-        state.video.addEventListener('loadeddata', update);
-        state.timer = setInterval(update, 1000);
-        update();
-      }
-
-      function onWaiting() {
-        state.wait_count++;
-        update();
-      }
-
-      function onStalled() {
-        state.stall_count++;
-        update();
-      }
-
-      function stop() {
-        if (state.timer) {
-          clearInterval(state.timer);
-          state.timer = null;
-        }
-
-        if (state.video) {
-          state.video.removeEventListener('waiting', onWaiting);
-          state.video.removeEventListener('stalled', onStalled);
-          state.video.removeEventListener('error', update);
-          state.video.removeEventListener('progress', update);
-          state.video.removeEventListener('loadedmetadata', update);
-          state.video.removeEventListener('loadeddata', update);
-          state.video = null;
-        }
-
-        detachPanel();
-      }
-
-      if (Lampa.Player && Lampa.Player.listener) {
-        Lampa.Player.listener.follow('ready', function () {
-          setTimeout(bindVideo, 500);
-        });
-        Lampa.Player.listener.follow('destroy', stop);
-      }
-
-      Lampa.Storage.listener.follow('change', function (e) {
-        if (e.name == 'online_mod_player_tech_info') {
-          if (enabled()) setTimeout(bindVideo, 100);
-          else stop();
-        }
-      });
-    }
-
-
     function addSettingsOnlineMod() {
       if (Lampa.Settings.main && Lampa.Settings.main() && !Lampa.Settings.main().render().find('[data-component="online_mod"]').length) {
         var field = $(Lampa.Lang.translate("<div class=\"settings-folder selector\" data-component=\"online_mod\">\n            <div class=\"settings-folder__icon\">\n                <svg height=\"260\" viewBox=\"0 0 244 260\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">\n                <path d=\"M242,88v170H10V88h41l-38,38h37.1l38-38h38.4l-38,38h38.4l38-38h38.3l-38,38H204L242,88L242,88z M228.9,2l8,37.7l0,0 L191.2,10L228.9,2z M160.6,56l-45.8-29.7l38-8.1l45.8,29.7L160.6,56z M84.5,72.1L38.8,42.4l38-8.1l45.8,29.7L84.5,72.1z M10,88 L2,50.2L47.8,80L10,88z\" fill=\"white\"/>\n                </svg>\n            </div>\n            <div class=\"settings-folder__name\">#{online_mod_title_full}</div>\n        </div>"));
@@ -15708,7 +15482,6 @@
       }
 
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_full_episode_title\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_full_episode_title}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
-      template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_player_tech_info\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_player_tech_info}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
       template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_save_last_balanser\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_save_last_balanser}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>\n        <div class=\"settings-param selector\" data-name=\"online_mod_clear_last_balanser\" data-static=\"true\">\n            <div class=\"settings-param__name\">#{online_mod_clear_last_balanser}</div>\n            <div class=\"settings-param__status\"></div>\n        </div>";
 
       if (Utils.isDebug()) {
@@ -15831,7 +15604,6 @@
       initMain();
       initFilmix();
       initSettings();
-      initPlayerTechInfo();
     }
 
     startPlugin();
