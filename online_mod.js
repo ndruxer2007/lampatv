@@ -14114,7 +14114,7 @@
       };
     }
 
-    var mod_version = '25.07.2026';
+    var mod_version = '26.07.2026.1';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -15486,6 +15486,22 @@
         }
       }
 
+      function controlsVisible() {
+        var controls = $('.player-panel, .player-top, .player-info, .player-video__panel, .player-panel__left, .player-panel__right');
+        var visible = false;
+
+        controls.each(function () {
+          var style = window.getComputedStyle(this);
+
+          if (style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity || 1) > 0.05 && this.offsetWidth && this.offsetHeight) {
+            visible = true;
+            return false;
+          }
+        });
+
+        return visible;
+      }
+
       function detachPanel() {
         if (state.panel) state.panel.remove();
       }
@@ -15545,6 +15561,13 @@
         }
 
         attachPanel();
+
+        if (!controlsVisible()) {
+          state.panel.hide();
+          return;
+        }
+
+        state.panel.show();
 
         var now = Date.now();
         var current = video.currentTime || 0;
