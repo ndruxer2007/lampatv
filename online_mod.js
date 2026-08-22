@@ -1,4 +1,4 @@
-//02.07.2026 - Fix
+//22.08.2026 - Ororo movies
 
 (function () {
     'use strict';
@@ -12602,6 +12602,451 @@
       }
     }
 
+    var ororoCatalogCache = {
+      credentials: '',
+      expires: 0,
+      movies: null
+    };
+    var ororoCredentialsFingerprint = '';
+    var ororoSettingsRequestId = 0;
+    var ororoSettingsNetwork = null;
+    var ororoApiBases = ['https://front.ororo-mirror.tv/api/v2', 'https://front.ororo.tv/api/v2'];
+
+    function ororoCredentialsHash(login, password) {
+      var value = login + '\n' + password;
+      var hash = 2166136261;
+
+      for (var i = 0; i < value.length; i++) {
+        hash ^= value.charCodeAt(i);
+        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+      }
+
+      return (hash >>> 0).toString(16) + ':' + value.length;
+    }
+
+    function resetOroroCatalog() {
+      ororoCatalogCache.credentials = '';
+      ororoCatalogCache.expires = 0;
+      ororoCatalogCache.movies = null;
+    }
+
+    function invalidateOroroAuthorization() {
+      ororoSettingsRequestId++;
+      if (ororoSettingsNetwork) ororoSettingsNetwork.clear();
+      resetOroroCatalog();
+      ororoCredentialsFingerprint = '';
+      Lampa.Storage.set('online_mod_ororo_status', '');
+    }
+
+    function getOroroCredentials() {
+      var credentials = {
+        login: (Lampa.Storage.get('online_mod_ororo_login', '') + '').trim(),
+        password: Lampa.Storage.get('online_mod_ororo_password', '') + ''
+      };
+      var fingerprint = ororoCredentialsHash(credentials.login, credentials.password);
+
+      if (ororoCredentialsFingerprint && ororoCredentialsFingerprint !== fingerprint) {
+        resetOroroCatalog();
+        Lampa.Storage.set('online_mod_ororo_status', '');
+      }
+
+      ororoCredentialsFingerprint = fingerprint;
+      credentials.fingerprint = fingerprint;
+      return credentials;
+    }
+
+    function validateOroroCredentials(credentials) {
+      if (!credentials.login && !credentials.password) return 'not_configured';
+      if (!credentials.login) return 'missing_login';
+      if (!credentials.password) return 'missing_password';
+      return '';
+    }
+
+    function ororoBasicAuthorization(credentials) {
+      var value = credentials.login + ':' + credentials.password;
+      var encoded = '';
+
+      if (Lampa.Base64 && Lampa.Base64.encode) {
+        encoded = Lampa.Base64.encode(value);
+      } else {
+        encoded = btoa(unescape(encodeURIComponent(value)));
+      }
+
+      return 'Basic ' + encoded;
+    }
+
+    function getOroroApiBases() {
+      var active = Lampa.Storage.get('online_mod_ororo_domain', '') + '';
+      var bases = [];
+      if (ororoApiBases.indexOf(active) !== -1) bases.push(active);
+      ororoApiBases.forEach(function (base) {
+        if (bases.indexOf(base) === -1) bases.push(base);
+      });
+      return bases;
+    }
+
+    function ororoRequestError(a, c) {
+      var status = a && parseInt(a.status) || 0;
+      if (status === 401) return 'invalid_credentials';
+      if (status === 402 || status === 403) return 'account_unavailable';
+      if (status === 404) return 'not_found';
+      if (c === 'parsererror' || status >= 200 && status < 300) return 'response_changed';
+      if (!status) return 'network_cors';
+      return 'network';
+    }
+
+    function requestOroro(network, path, isCurrent, success, error) {
+      var credentials = getOroroCredentials();
+      var credentials_error = validateOroroCredentials(credentials);
+      if (credentials_error) return error(credentials_error);
+      var bases = getOroroApiBases();
+      var index = 0;
+      var authorization = '';
+
+      try {
+        authorization = ororoBasicAuthorization(credentials);
+      } catch (e) {
+        return error('invalid_credentials');
+      }
+
+      var attempt = function attempt(last_error) {
+        if (isCurrent && !isCurrent()) return;
+        if (index >= bases.length) return error(last_error || 'network');
+        var base = bases[index++];
+        var url = base + path;
+        network.timeout(path === '/movies' ? 1000 * 16 : 1000 * 10);
+        network["native"](url, function (json) {
+          if (isCurrent && !isCurrent()) return;
+          Lampa.Storage.set('online_mod_ororo_domain', base);
+          success(json, url);
+        }, function (a, c) {
+          if (isCurrent && !isCurrent()) return;
+          var code = ororoRequestError(a, c);
+          var status = a && parseInt(a.status) || 0;
+
+          if ((!status || status >= 500) && index < bases.length) {
+            attempt(code);
+          } else {
+            error(code);
+          }
+        }, false, {
+          dataType: 'json',
+          headers: {
+            Accept: 'application/json',
+            Authorization: authorization
+          }
+        });
+      };
+
+      attempt();
+    }
+
+    function loadOroroCatalog(network, isCurrent, force, success, error) {
+      var credentials = getOroroCredentials();
+      var credentials_error = validateOroroCredentials(credentials);
+      if (credentials_error) return error(credentials_error);
+
+      if (!force && ororoCatalogCache.credentials === credentials.fingerprint && ororoCatalogCache.expires > Date.now() && ororoCatalogCache.movies) {
+        success(ororoCatalogCache.movies);
+        return;
+      }
+
+      requestOroro(network, '/movies', isCurrent, function (json) {
+        if (!json || !json.movies || !json.movies.forEach) return error('response_changed');
+        ororoCatalogCache.credentials = credentials.fingerprint;
+        ororoCatalogCache.expires = Date.now() + 1000 * 60 * 15;
+        ororoCatalogCache.movies = json.movies;
+        Lampa.Storage.set('online_mod_ororo_status', 'ready');
+        success(json.movies);
+      }, function (code) {
+        if (code === 'invalid_credentials' || code === 'account_unavailable') {
+          resetOroroCatalog();
+          Lampa.Storage.set('online_mod_ororo_status', 'error');
+        }
+
+        error(code);
+      });
+    }
+
+    function ororoErrorMessage(code) {
+      var keys = {
+        not_configured: 'online_mod_ororo_not_configured',
+        missing_login: 'online_mod_ororo_missing_login',
+        missing_password: 'online_mod_ororo_missing_password',
+        invalid_credentials: 'online_mod_ororo_invalid_credentials',
+        account_unavailable: 'online_mod_ororo_account_unavailable',
+        not_found: 'online_mod_ororo_not_found',
+        ambiguous: 'online_mod_ororo_ambiguous',
+        series: 'online_mod_ororo_series',
+        no_video: 'online_mod_ororo_no_video',
+        response_changed: 'online_mod_ororo_response_changed',
+        network_cors: 'online_mod_ororo_network_cors',
+        network: 'online_mod_ororo_network'
+      };
+      return Lampa.Lang.translate(keys[code] || keys.network);
+    }
+
+    function checkOroroAuthorization(success, error) {
+      var request_id = ++ororoSettingsRequestId;
+      if (ororoSettingsNetwork) ororoSettingsNetwork.clear();
+      ororoSettingsNetwork = new Lampa.Reguest();
+      loadOroroCatalog(ororoSettingsNetwork, function () {
+        return request_id === ororoSettingsRequestId;
+      }, true, function () {
+        if (request_id !== ororoSettingsRequestId) return;
+        if (success) success();
+      }, function (code) {
+        if (request_id !== ororoSettingsRequestId) return;
+        if (code !== 'not_configured' && code !== 'missing_login' && code !== 'missing_password') Lampa.Storage.set('online_mod_ororo_status', 'error');
+        if (error) error(code);
+      });
+    }
+
+    function normalizeOroroImdb(value) {
+      value = (value == null ? '' : value + '').toLowerCase().replace(/^tt/, '').replace(/\D/g, '').replace(/^0+/, '');
+      return value || '';
+    }
+
+    function ororoMovieYear(object) {
+      var movie = object.movie || {};
+      var value = object.search_date || movie.release_date || movie.first_air_date || movie.year || '';
+      var year = parseInt((value + '').slice(0, 4));
+      return year > 1800 ? year : 0;
+    }
+
+    function ororoMovieTitles(component, object) {
+      var movie = object.movie || {};
+      var titles = [];
+
+      var add = function add(value, priority) {
+        if (!value) return;
+        var normalized = component.normalizeTitle(value + '');
+        if (!normalized) return;
+        var old = titles.filter(function (item) {
+          return item.value === normalized;
+        })[0];
+        if (old) old.priority = Math.max(old.priority, priority);else titles.push({
+          value: normalized,
+          priority: priority
+        });
+      };
+
+      add(movie.original_title, 500);
+      add(object.search, object.clarification ? 475 : 350);
+      add(movie.title, 450);
+
+      if (movie.alternative_titles && movie.alternative_titles.results) {
+        movie.alternative_titles.results.forEach(function (title) {
+          add(title && title.title, 400);
+        });
+      }
+
+      return titles;
+    }
+
+    function matchOroroMovie(component, object, movies) {
+      var movie = object.movie || {};
+      var imdb = normalizeOroroImdb(movie.imdb_id || movie.imdbId);
+      var by_imdb = imdb ? movies.filter(function (candidate) {
+        return normalizeOroroImdb(candidate.imdb_id || candidate.imdbId) === imdb;
+      }) : [];
+      if (by_imdb.length === 1) return {
+        movie: by_imdb[0]
+      };
+      if (by_imdb.length > 1) return {
+        error: 'ambiguous'
+      };
+      var year = ororoMovieYear(object);
+      var titles = ororoMovieTitles(component, object);
+      var ranked = [];
+
+      movies.forEach(function (candidate) {
+        if (!candidate || !candidate.name) return;
+        var name = component.normalizeTitle(candidate.name + '');
+        var title = titles.filter(function (item) {
+          return item.value === name;
+        }).sort(function (a, b) {
+          return b.priority - a.priority;
+        })[0];
+        if (!title) return;
+        var candidate_year = parseInt(candidate.year);
+        if (year && candidate_year && candidate_year !== year) return;
+        ranked.push({
+          movie: candidate,
+          score: title.priority + (year && candidate_year === year ? 1000 : 0)
+        });
+      });
+
+      ranked.sort(function (a, b) {
+        if (a.score !== b.score) return b.score - a.score;
+        return parseInt(a.movie.id) - parseInt(b.movie.id);
+      });
+      if (!ranked.length) return {
+        error: 'not_found'
+      };
+      if (ranked.length > 1 && ranked[0].score === ranked[1].score) return {
+        error: 'ambiguous'
+      };
+      return {
+        movie: ranked[0].movie
+      };
+    }
+
+    function isOroroSeries(object) {
+      var movie = object.movie || {};
+      return movie.media_type === 'tv' || movie.type === 'tv' || !!movie.name || !!movie.original_name || !!movie.first_air_date || !!movie.number_of_seasons;
+    }
+
+    function normalizeOroroSubtitleLanguage(value) {
+      value = (value == null ? '' : value + '').toLowerCase().trim().replace(/[_-].*$/, '').replace(/[.\s]+/g, '');
+      if (['ru', 'rus', 'russian', 'русский', 'рус'].indexOf(value) !== -1) return 'ru';
+      if (['en', 'eng', 'english', 'английский', 'англ'].indexOf(value) !== -1) return 'en';
+      return '';
+    }
+
+    function normalizeOroroSubtitles(component, subtitles, referrer) {
+      var result = [];
+      var added = {};
+      if (!subtitles || !subtitles.forEach) return false;
+      subtitles.forEach(function (subtitle) {
+        var language = normalizeOroroSubtitleLanguage(subtitle && (subtitle.lang || subtitle.language || subtitle.label));
+        var url = subtitle && subtitle.url;
+        if (!language || !url || added[language]) return;
+        url = component.fixLink(url + '', referrer);
+        if (!/^https?:\/\//i.test(url)) return;
+        added[language] = true;
+        result.push({
+          label: language === 'ru' ? 'Русские' : 'English',
+          language: language,
+          lang: language,
+          url: component.processSubs(url)
+        });
+      });
+      return result.length ? result : false;
+    }
+
+    function ororo(component, _object) {
+      var network = new Lampa.Reguest();
+      var object = _object;
+      var request_id = 0;
+      var select_title = '';
+
+      var current = function current(id) {
+        return request_id === id;
+      };
+
+      var fail = function fail(id, code) {
+        if (!current(id)) return;
+        component.reset();
+        component.empty(ororoErrorMessage(code));
+      };
+
+      this.search = function (_object) {
+        object = _object || object;
+        var id = ++request_id;
+        network.clear();
+        component.loading(true);
+
+        if (isOroroSeries(object)) return fail(id, 'series');
+        var credentials_error = validateOroroCredentials(getOroroCredentials());
+        if (credentials_error) return fail(id, credentials_error);
+        loadOroroCatalog(network, function () {
+          return current(id);
+        }, false, function (movies) {
+          if (!current(id)) return;
+          var matched = matchOroroMovie(component, object, movies);
+          if (matched.error) return fail(id, matched.error);
+          requestOroro(network, '/movies/' + encodeURIComponent(matched.movie.id), function () {
+            return current(id);
+          }, function (json, detail_url) {
+            if (!current(id)) return;
+            if (!json || typeof json !== 'object') return fail(id, 'response_changed');
+            var file = component.fixLink(json.url || '', detail_url);
+            if (!/^https?:\/\//i.test(file)) return fail(id, 'no_video');
+            select_title = json.name || matched.movie.name || object.movie.original_title || object.movie.title;
+            var subtitles = normalizeOroroSubtitles(component, json.subtitles, detail_url);
+            var languages = subtitles ? subtitles.map(function (subtitle) {
+              return subtitle.lang.toUpperCase();
+            }) : [];
+            Lampa.Storage.set('online_mod_ororo_status', 'ready');
+            append([{
+              title: select_title,
+              quality: json.resolution || 'HLS',
+              info: languages.length ? ' / ' + languages.join(' / ') : ' / ' + Lampa.Lang.translate('online_mod_ororo_no_subtitles'),
+              file: file,
+              subtitles: subtitles
+            }]);
+          }, function (code) {
+            fail(id, code === 'not_found' ? 'no_video' : code);
+          });
+        }, function (code) {
+          fail(id, code);
+        });
+      };
+
+      this.extendChoice = function () {};
+
+      this.reset = function () {
+        this.search(object);
+      };
+
+      this.destroy = function () {
+        request_id++;
+        network.clear();
+        network = null;
+      };
+
+      function append(items) {
+        component.reset();
+        var viewed = Lampa.Storage.cache('online_view', 5000, []);
+        items.forEach(function (element) {
+          var base_title = object.movie.original_title || object.movie.title || select_title;
+          var hash = Lampa.Utils.hash(base_title);
+          var view = Lampa.Timeline.view(hash);
+          var item = Lampa.Template.get('online_mod', element);
+          var hash_file = Lampa.Utils.hash(base_title + 'ororo');
+          element.timeline = view;
+          item.append(Lampa.Timeline.render(view));
+          if (Lampa.Timeline.details) item.find('.online__quality').append(Lampa.Timeline.details(view, ' / '));
+          if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+          item.on('hover:enter', function (event, options) {
+            if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
+
+            if (element.file) {
+              var first = {
+                url: element.file,
+                subtitles: element.subtitles,
+                timeline: element.timeline,
+                title: select_title
+              };
+              if (options && options.runas) Lampa.Player.runas(options.runas);
+              Lampa.Player.play(first);
+              Lampa.Player.playlist([first]);
+
+              if (viewed.indexOf(hash_file) === -1) {
+                viewed.push(hash_file);
+                item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                Lampa.Storage.set('online_view', viewed);
+              }
+            } else Lampa.Noty.show(Lampa.Lang.translate('online_mod_nolink'));
+          });
+          component.append(item);
+          component.contextmenu({
+            item: item,
+            view: view,
+            viewed: viewed,
+            hash_file: hash_file,
+            file: function file(call) {
+              call({
+                file: element.file
+              });
+            }
+          });
+        });
+        component.start(true);
+      }
+    }
+
     var proxyInitialized = {};
     var proxyWindow = {};
     var proxyCalls = {};
@@ -12858,6 +13303,13 @@
         search: true,
         kp: false,
         imdb: false
+      }, {
+        name: 'ororo',
+        title: 'Ororo',
+        source: new ororo(this, object),
+        search: true,
+        kp: false,
+        imdb: true
       }, {
         name: 'kodik',
         title: 'Kodik',
@@ -14114,7 +14566,7 @@
       };
     }
 
-    var mod_version = '26.07.2026.3';
+    var mod_version = '22.08.2026';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -14712,6 +15164,118 @@
           be: 'Статус',
           en: 'Status',
           zh: '状态'
+        },
+        online_mod_ororo_login: {
+          ru: 'Ororo: логин / email',
+          uk: 'Ororo: логін / email',
+          be: 'Ororo: лагін / email',
+          en: 'Ororo: login / email',
+          zh: 'Ororo: login / email'
+        },
+        online_mod_ororo_password: {
+          ru: 'Ororo: пароль',
+          uk: 'Ororo: пароль',
+          be: 'Ororo: пароль',
+          en: 'Ororo: password',
+          zh: 'Ororo: password'
+        },
+        online_mod_ororo_check: {
+          ru: 'Ororo: проверить вход',
+          uk: 'Ororo: перевірити вхід',
+          be: 'Ororo: праверыць уваход',
+          en: 'Ororo: check sign-in',
+          zh: 'Ororo: check sign-in'
+        },
+        online_mod_ororo_not_configured: {
+          ru: 'Ororo не настроен. Укажите логин и пароль в настройках Online Mod',
+          uk: 'Ororo не налаштовано. Вкажіть логін і пароль у налаштуваннях Online Mod',
+          be: 'Ororo не наладжаны. Укажыце лагін і пароль у наладах Online Mod',
+          en: 'Ororo is not configured. Enter login and password in Online Mod settings',
+          zh: 'Ororo is not configured. Enter login and password in Online Mod settings'
+        },
+        online_mod_ororo_missing_login: {
+          ru: 'Не указан логин / email Ororo',
+          uk: 'Не вказано логін / email Ororo',
+          be: 'Не ўказаны лагін / email Ororo',
+          en: 'Ororo login / email is missing',
+          zh: 'Ororo login / email is missing'
+        },
+        online_mod_ororo_missing_password: {
+          ru: 'Не указан пароль Ororo',
+          uk: 'Не вказано пароль Ororo',
+          be: 'Не ўказаны пароль Ororo',
+          en: 'Ororo password is missing',
+          zh: 'Ororo password is missing'
+        },
+        online_mod_ororo_invalid_credentials: {
+          ru: 'Ororo отклонил вход. Проверьте логин и пароль и выполните вход повторно',
+          uk: 'Ororo відхилив вхід. Перевірте логін і пароль та виконайте вхід повторно',
+          be: 'Ororo адхіліў уваход. Праверце лагін і пароль і ўвайдзіце паўторна',
+          en: 'Ororo rejected sign-in. Check the login and password and sign in again',
+          zh: 'Ororo rejected sign-in. Check the login and password and sign in again'
+        },
+        online_mod_ororo_account_unavailable: {
+          ru: 'Этот контент недоступен текущему аккаунту Ororo или достигнут лимит',
+          uk: 'Цей контент недоступний поточному акаунту Ororo або досягнуто ліміт',
+          be: 'Гэты кантэнт недаступны бягучаму акаўнту Ororo або дасягнуты ліміт',
+          en: 'This content is unavailable to the current Ororo account or its limit was reached',
+          zh: 'This content is unavailable to the current Ororo account or its limit was reached'
+        },
+        online_mod_ororo_not_found: {
+          ru: 'Фильм не найден в Ororo',
+          uk: 'Фільм не знайдено в Ororo',
+          be: 'Фільм не знойдзены ў Ororo',
+          en: 'Movie was not found in Ororo',
+          zh: 'Movie was not found in Ororo'
+        },
+        online_mod_ororo_ambiguous: {
+          ru: 'В Ororo найдено несколько одинаково подходящих фильмов. Уточните название или год',
+          uk: 'В Ororo знайдено кілька однаково відповідних фільмів. Уточніть назву або рік',
+          be: 'У Ororo знойдзена некалькі аднолькава прыдатных фільмаў. Удакладніце назву або год',
+          en: 'Ororo returned several equally suitable movies. Refine the title or year',
+          zh: 'Ororo returned several equally suitable movies. Refine the title or year'
+        },
+        online_mod_ororo_series: {
+          ru: 'Сериалы Ororo будут поддержаны отдельным этапом. Сейчас доступны только фильмы',
+          uk: 'Серіали Ororo будуть підтримані окремим етапом. Зараз доступні лише фільми',
+          be: 'Серыялы Ororo будуць падтрыманы асобным этапам. Зараз даступныя толькі фільмы',
+          en: 'Ororo series will be supported in a separate stage. Only movies are available now',
+          zh: 'Ororo series will be supported in a separate stage. Only movies are available now'
+        },
+        online_mod_ororo_no_video: {
+          ru: 'Ororo не вернул доступный видеопоток для этого фильма',
+          uk: 'Ororo не повернув доступний відеопотік для цього фільму',
+          be: 'Ororo не вярнуў даступны відэапаток для гэтага фільма',
+          en: 'Ororo did not return an available video stream for this movie',
+          zh: 'Ororo did not return an available video stream for this movie'
+        },
+        online_mod_ororo_no_subtitles: {
+          ru: 'без субтитров',
+          uk: 'без субтитрів',
+          be: 'без субтытраў',
+          en: 'no subtitles',
+          zh: 'no subtitles'
+        },
+        online_mod_ororo_response_changed: {
+          ru: 'Формат ответа Ororo изменился. Обновите плагин или повторите позже',
+          uk: 'Формат відповіді Ororo змінився. Оновіть плагін або повторіть пізніше',
+          be: 'Фармат адказу Ororo змяніўся. Абнавіце плагін або паўтарыце пазней',
+          en: 'The Ororo response format has changed. Update the plugin or try again later',
+          zh: 'The Ororo response format has changed. Update the plugin or try again later'
+        },
+        online_mod_ororo_network_cors: {
+          ru: 'Запрос Ororo заблокирован сетью или CORS. Проверьте подключение и повторите',
+          uk: 'Запит Ororo заблоковано мережею або CORS. Перевірте підключення та повторіть',
+          be: 'Запыт Ororo заблакаваны сеткай або CORS. Праверце злучэнне і паўтарыце',
+          en: 'The Ororo request was blocked by the network or CORS. Check the connection and retry',
+          zh: 'The Ororo request was blocked by the network or CORS. Check the connection and retry'
+        },
+        online_mod_ororo_network: {
+          ru: 'Сетевая ошибка Ororo. Повторите попытку позже',
+          uk: 'Мережева помилка Ororo. Повторіть спробу пізніше',
+          be: 'Сеткавая памылка Ororo. Паўтарыце спробу пазней',
+          en: 'Ororo network error. Try again later',
+          zh: 'Ororo network error. Try again later'
         },
         online_mod_voice_subscribe: {
           ru: 'Подписаться на перевод',
@@ -15437,6 +16001,9 @@
 
     function initSettings() {
       var template = "<div>";
+      template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_ororo_login\" data-static=\"true\">\n            <div class=\"settings-param__name\">#{online_mod_ororo_login}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
+      template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_ororo_password\" data-static=\"true\">\n            <div class=\"settings-param__name\">#{online_mod_ororo_password}</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
+      template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_ororo_check\" data-static=\"true\">\n            <div class=\"settings-param__name\">#{online_mod_ororo_check}</div>\n            <div class=\"settings-param__status\"></div>\n        </div>";
 
       if (Utils.isDebug()) {
         template += "\n        <div class=\"settings-param selector\" data-name=\"online_mod_proxy_lumex\" data-type=\"toggle\">\n            <div class=\"settings-param__name\">#{online_mod_proxy_balanser} Lumex</div>\n            <div class=\"settings-param__value\"></div>\n        </div>";
@@ -15544,6 +16111,55 @@
       }
       Lampa.Settings.listener.follow('open', function (e) {
         if (e.name == 'online_mod') {
+          var ororo_login = e.body.find('[data-name="online_mod_ororo_login"]');
+          var ororo_password = e.body.find('[data-name="online_mod_ororo_password"]');
+          var ororo_check = e.body.find('[data-name="online_mod_ororo_check"]');
+
+          var updateOroroSettings = function updateOroroSettings() {
+            var credentials = getOroroCredentials();
+            var placeholder = Lampa.Lang.translate('settings_cub_not_specified');
+            $('.settings-param__value', ororo_login).text(credentials.login || placeholder);
+            $('.settings-param__value', ororo_password).text(credentials.password ? '••••••' : placeholder);
+            var status = Lampa.Storage.get('online_mod_ororo_status', '') + '';
+            $('.settings-param__status', ororo_check).removeClass('active error wait').addClass(status === 'ready' ? 'active' : status === 'error' ? 'error' : '');
+          };
+
+          var bindOroroInput = function bindOroroInput(element, key, password) {
+            element.unbind('hover:enter').on('hover:enter', function () {
+              if (!Lampa.Input || !Lampa.Input.edit) return;
+              var old_value = Lampa.Storage.get(key, '') + '';
+              Lampa.Input.edit({
+                title: $('.settings-param__name', element).text(),
+                value: old_value,
+                password: password,
+                keyboard: password ? 'lampa' : undefined,
+                nosave: true
+              }, function (new_value) {
+                new_value = new_value == null ? old_value : new_value + '';
+                if (!password) new_value = new_value.trim();
+
+                if (new_value !== old_value) {
+                  Lampa.Storage.set(key, new_value);
+                  invalidateOroroAuthorization();
+                }
+
+                updateOroroSettings();
+              });
+            });
+          };
+
+          bindOroroInput(ororo_login, 'online_mod_ororo_login', false);
+          bindOroroInput(ororo_password, 'online_mod_ororo_password', true);
+          ororo_check.unbind('hover:enter').on('hover:enter', function () {
+            var status = $('.settings-param__status', ororo_check).removeClass('active error wait').addClass('wait');
+            checkOroroAuthorization(function () {
+              status.removeClass('active error wait').addClass('active');
+            }, function (code) {
+              status.removeClass('active error wait').addClass('error');
+              Lampa.Noty.show(ororoErrorMessage(code));
+            });
+          });
+          updateOroroSettings();
           var clear_last_balanser = e.body.find('[data-name="online_mod_clear_last_balanser"]');
           clear_last_balanser.unbind('hover:enter').on('hover:enter', function () {
             Lampa.Storage.set('online_last_balanser', {});
