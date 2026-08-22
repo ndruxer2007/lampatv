@@ -23,7 +23,13 @@ English cue.
    `EnglishLearning.configure()` API accepts offsets up to plus or minus 30
    seconds for development/integration use. The plugin automatically favours
    ordinary EN and RU tracks and avoids commentary/dubbing labels.
-4. During an active English cue, press the Samsung red colour key. Its Lampa
+4. Choose **Subtitle size** in the settings UI: 24, 28 (default), 32, 36, or
+   40 px. The change updates the current overlay immediately; the direct API is
+   safely clamped to 18–48 px. On very small screens the saved/requested value
+   is retained but the effective displayed size may be reduced so one EN+RU
+   pair fits above player controls; extra long wrapped text may still be clipped
+   rather than covering controls.
+5. During an active English cue, press the Samsung red colour key. Its Lampa
    keypad code is `403`; it seeks to the cue start minus the configured lead-in
    (0 ms, 300 ms, or 1 second) and resumes playback.
 

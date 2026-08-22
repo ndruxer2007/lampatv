@@ -13,7 +13,7 @@ const fixturePath = resolve(directory, '..', 'fixtures', 'player-overlay-fixture
 function element() {
     const classes = new Set();
     return {
-        children: [], style: {}, hidden: false, textContent: '', parentNode: null,
+        children: [], style: {}, hidden: false, textContent: '', parentNode: null, clientHeight: 180,
         classList: { contains: (name) => classes.has(name), add: (name) => classes.add(name), remove: (name) => classes.delete(name) },
         setAttribute() {}, appendChild(node) { node.parentNode = this; this.children.push(node); },
         removeChild(node) { this.children.splice(this.children.indexOf(node), 1); node.parentNode = null; }
@@ -29,6 +29,8 @@ test('local overlay fixture documents both controls states and small-viewport co
     const html = await readFile(fixturePath, 'utf8');
     assert.match(html, /width:320px; height:180px/);
     assert.match(html, /bottom:9%/);
+    assert.match(html, /font-size:28px/);
+    assert.match(html, /max-height:75px/);
     assert.match(html, /player--panel-visible[^}]+bottom:18%/);
     assert.match(html, /pointer-events:none/);
     assert.match(html, /aria-hidden="true"/);
@@ -41,18 +43,30 @@ test('overlay implementation honours fixture geometry and disabled state without
     const host = element(), playerEvents = listener(), videoEvents = listener();
     const context = { Lampa: { Player: { listener: playerEvents, render: () => [host] }, PlayerVideo: { listener: videoEvents }, Storage: { get: () => ({}), set() {} } }, document: { createElement: element }, Promise, setTimeout, clearTimeout };
     vm.runInNewContext(await readFile(bundlePath, 'utf8'), context);
-    context.EnglishLearning.configure({ enabled: true, transport: () => Promise.resolve('WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nA very long safe line <img src=x onerror=1>') });
-    playerEvents.send('ready', { subtitles: [{ label: 'EN', url: 'en' }] });
+    context.EnglishLearning.configure({ enabled: true, transport: (url) => Promise.resolve(url === 'ru' ? 'WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nРусская строка' : 'WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nA very long safe line <img src=x onerror=1>') });
+    playerEvents.send('ready', { subtitles: [{ label: 'EN', url: 'en' }, { label: 'RU', url: 'ru' }] });
     await new Promise((done) => setImmediate(done));
     videoEvents.send('timeupdate', { current: 2 });
     const overlay = host.children[0];
     assert.equal(overlay.style.bottom, '9%');
-    assert.match(overlay.style.cssText, /max-height:5em/);
+    assert.equal(overlay.style.fontSize, '28px');
+    assert.equal(overlay.style.maxHeight, '75px');
     assert.match(overlay.style.cssText, /pointer-events:none/);
     assert.equal(overlay.children[0].textContent, 'A very long safe line');
     host.classList.add('player--panel-visible');
     videoEvents.send('timeupdate', { current: 2 });
     assert.equal(overlay.style.bottom, '18%');
+    context.EnglishLearning.configure({ subtitleFontSizePx: 40 });
+    assert.equal(context.EnglishLearning.getState().prototype.settings.subtitleFontSizePx, 40);
+    assert.equal(overlay.style.fontSize, '31px');
+    assert.equal(overlay.style.maxHeight, '75px');
+    assert.ok(31 * 1.25 + 31 * 0.82 * 1.25 + 4 <= 75);
+    playerEvents.send('ready', { subtitles: [{ label: 'EN', url: 'en' }] });
+    await new Promise((done) => setImmediate(done));
+    videoEvents.send('timeupdate', { current: 2 });
+    const englishOnly = host.children[0];
+    assert.equal(englishOnly.style.fontSize, '40px');
+    assert.equal(englishOnly.style.maxHeight, '75px');
     context.EnglishLearning.configure({ enabled: false });
     assert.equal(host.children.length, 0);
 });

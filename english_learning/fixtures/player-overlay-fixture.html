@@ -10,7 +10,8 @@
 -->
 <style>
   .player { position:relative; width:320px; height:180px; overflow:hidden; background:#111; color:#fff; }
-  .english-learning-subtitles { position:absolute; left:8%; right:8%; bottom:9%; max-height:5em; overflow:hidden; text-align:center; pointer-events:none; word-wrap:break-word; }
+  /* At 320x180, 42% caps at 75px; a requested 40px dual line adapts to 31px. */
+  .english-learning-subtitles { position:absolute; left:8%; right:8%; bottom:9%; font-size:28px; max-height:75px; overflow:hidden; text-align:center; pointer-events:none; word-wrap:break-word; }
   .player--panel-visible .english-learning-subtitles { bottom:18%; }
   .english-learning-subtitles__russian { margin-top:4px; color:#ddd; font-size:.82em; }
 </style>

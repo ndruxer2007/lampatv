@@ -25,23 +25,23 @@ test('resolver handles language aliases, forced labels, commentary and determini
 
 test('settings default to disabled, clamp offsets, persist no URLs and apply toggle immediately', async () => {
   const { api, store } = await setup();
-  assert.equal(api.getState().prototype.settings.enabled, false);
-  api.configure({ enabled: true, englishOffsetMs: 999999, russianOffsetMs: 'bad', englishTrack: { label: 'English' } });
+  assert.equal(api.getState().prototype.settings.enabled, false); assert.equal(api.getState().prototype.settings.subtitleFontSizePx, 28);
+  api.configure({ enabled: true, englishOffsetMs: 999999, russianOffsetMs: 'bad', subtitleFontSizePx: 999, englishTrack: { label: 'English' } });
   const value = api.getState().prototype.settings;
-  assert.equal(value.enabled, true); assert.equal(value.englishOffsetMs, 30000); assert.equal(value.russianOffsetMs, 0);
-  assert.equal(store.english_learning_preferences.englishTrack.label, 'English'); assert.equal(store.english_learning_enabled, true); assert.equal(store.english_learning_english_offset, '30000');
+  assert.equal(value.enabled, true); assert.equal(value.englishOffsetMs, 30000); assert.equal(value.russianOffsetMs, 0); assert.equal(value.subtitleFontSizePx, 48);
+  assert.equal(store.english_learning_preferences.englishTrack.label, 'English'); assert.equal(store.english_learning_enabled, true); assert.equal(store.english_learning_english_offset, '30000'); assert.equal(store.english_learning_font_size, '48');
   assert.equal(JSON.stringify(store.english_learning_preferences).includes('url'), false);
 });
 
 test('invalid persisted preferences and scalar SettingsApi fields fall back safely', async () => {
   const broken = { english_learning_preferences: '{not json' }; const { api } = await setup(broken);
-  assert.equal(api.getState().prototype.settings.enabled, false); api.configure({ englishTrack: { url: 'must-not-store' }, russianOffsetMs: Infinity });
-  assert.equal(api.getState().prototype.settings.englishTrack, null); assert.equal(api.getState().prototype.settings.russianOffsetMs, 0);
+  assert.equal(api.getState().prototype.settings.enabled, false); api.configure({ englishTrack: { url: 'must-not-store' }, russianOffsetMs: Infinity, subtitleFontSizePx: 'bad' });
+  assert.equal(api.getState().prototype.settings.englishTrack, null); assert.equal(api.getState().prototype.settings.russianOffsetMs, 0); assert.equal(api.getState().prototype.settings.subtitleFontSizePx, 28);
 });
 
 test('defined SettingsApi scalar fields override blob safely at startup', async () => {
-  const { api } = await setup({ english_learning_preferences: { enabled: false }, __fields: { english_learning_enabled: 'true', english_learning_show_russian: false, english_learning_english_offset: '999999', english_learning_russian_offset: 'bad', english_learning_diagnostics: 'true' } });
-  const values = api.getState().prototype.settings; assert.equal(values.enabled, true); assert.equal(values.showRussian, false); assert.equal(values.englishOffsetMs, 30000); assert.equal(values.russianOffsetMs, 0); assert.equal(values.diagnostics, true);
+  const { api } = await setup({ english_learning_preferences: { enabled: false, subtitleFontSizePx: 24 }, __fields: { english_learning_enabled: 'true', english_learning_show_russian: false, english_learning_english_offset: '999999', english_learning_russian_offset: 'bad', english_learning_font_size: '1', english_learning_diagnostics: 'true' } });
+  const values = api.getState().prototype.settings; assert.equal(values.enabled, true); assert.equal(values.showRussian, false); assert.equal(values.englishOffsetMs, 30000); assert.equal(values.russianOffsetMs, 0); assert.equal(values.subtitleFontSizePx, 18); assert.equal(values.diagnostics, true);
 });
 
 test('loads only selected unique EN/RU tracks and provides EN-only or missing-EN graceful behaviour', async () => {
@@ -67,6 +67,7 @@ test('overlay uses textContent, follows independent offsets/showRussian and chan
   videoEvents.send('timeupdate', { current: 2 });
   const overlay = host.children.find((x) => x.className === 'english-learning-subtitles');
   assert.ok(overlay); assert.equal(overlay.children[0].textContent, 'Hello English'); assert.equal(overlay.children[0].innerHTML, undefined);
+  assert.equal(overlay.style.fontSize, '28px'); const sameOverlay = overlay; api.configure({ subtitleFontSizePx: 24 }); assert.equal(host.children.find((x) => x.className === 'english-learning-subtitles'), sameOverlay); assert.equal(overlay.style.fontSize, '24px'); api.configure({ subtitleFontSizePx: 40 }); assert.equal(overlay.style.fontSize, '40px');
   assert.equal(overlay.children[1].hidden, false); host.classList.add('player--panel-visible'); videoEvents.send('timeupdate', { current: 2 }); assert.equal(overlay.style.bottom, '18%');
   api.configure({ showRussian: false }); assert.equal(overlay.children[1].hidden, true);
   api.configure({ englishOffsetMs: 3000 }); videoEvents.send('timeupdate', { current: 2 }); assert.equal(host.children.some((x) => x.className === 'english-learning-subtitles'), false);
@@ -99,7 +100,7 @@ test('Cyrillic commentary penalty and same-url EN/RU exclusion are deterministic
 test('SettingsApi registers one namespaced component and applies onChange immediately', async () => {
   const calls = { components: [], params: [] }, storage = { field: (name) => name === 'english_learning_enabled' ? 'true' : '0', get: () => ({}), set() {} }, playerEvents = events(), videoEvents = events(), host = element();
   const context = { Lampa: { Player: { listener: playerEvents, render: () => [host] }, PlayerVideo: { listener: videoEvents }, Storage: storage, Lang: { add() {}, translate: (x) => x }, SettingsApi: { addComponent: (x) => calls.components.push(x), addParam: (x) => calls.params.push(x) } }, document: { createElement: element }, Promise, setTimeout, clearTimeout };
-  vm.runInNewContext(await readFile(bundle, 'utf8'), context); assert.equal(calls.components.length, 1); assert.equal(calls.components[0].component, 'english_learning'); assert.equal(typeof calls.components[0].name, 'string'); assert.notEqual(calls.components[0].name, 'undefined'); assert.match(calls.components[0].icon, /^<svg\b/); assert.match(calls.components[0].icon, /viewBox="0 0 24 24"/); assert.match(calls.components[0].icon, /currentColor/); assert.match(calls.components[0].icon, /focusable="false"/); assert.equal(calls.components[0].icon.includes('undefined'), false); assert.equal(calls.params.length, 7); assert.equal(calls.params[0].param.name, 'english_learning_enabled'); assert.equal(calls.params[0].param.default, false); assert.equal(calls.params[1].param.default, true); assert.equal(calls.params[4].param.default, false); assert.equal(calls.params[5].param.default, true); assert.equal(calls.params[6].param.default, '300'); calls.params[0].onChange(); assert.equal(context.EnglishLearning.getState().prototype.settings.enabled, true);
+  vm.runInNewContext(await readFile(bundle, 'utf8'), context); assert.equal(calls.components.length, 1); assert.equal(calls.components[0].component, 'english_learning'); assert.equal(typeof calls.components[0].name, 'string'); assert.notEqual(calls.components[0].name, 'undefined'); assert.match(calls.components[0].icon, /^<svg\b/); assert.match(calls.components[0].icon, /viewBox="0 0 24 24"/); assert.match(calls.components[0].icon, /currentColor/); assert.match(calls.components[0].icon, /focusable="false"/); assert.equal(calls.components[0].icon.includes('undefined'), false); assert.equal(calls.params.length, 8); assert.equal(calls.params[0].param.name, 'english_learning_enabled'); assert.equal(calls.params[0].param.default, false); assert.equal(calls.params[1].param.default, true); assert.equal(calls.params[4].param.name, 'english_learning_font_size'); assert.equal(JSON.stringify(calls.params[4].param.values), JSON.stringify({ '24': '24 px', '28': '28 px', '32': '32 px', '36': '36 px', '40': '40 px' })); assert.equal(calls.params[4].param.default, '28'); assert.equal(calls.params[5].param.default, false); assert.equal(calls.params[6].param.default, true); assert.equal(calls.params[7].param.default, '300'); calls.params[0].onChange(); calls.params[4].onChange('40'); assert.equal(context.EnglishLearning.getState().prototype.settings.enabled, true); assert.equal(context.EnglishLearning.getState().prototype.settings.subtitleFontSizePx, 40); assert.equal(context.EnglishLearning.getState().prototype.settings.russianOffsetMs, 0);
   vm.runInNewContext(await readFile(bundle, 'utf8'), context); assert.equal(calls.components.length, 1);
 });
 
