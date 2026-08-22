@@ -1,4 +1,4 @@
-//22.08.2026.1 - Ororo movie matching follow-up
+//23.08.2026 - Ororo movie subscription status
 
 (function () {
     'use strict';
@@ -12753,6 +12753,13 @@
 
       requestOroro(network, '/movies', isCurrent, function (json) {
         if (!json || !json.movies || !json.movies.forEach) return error('response_changed');
+
+        if (!json.movies.length) {
+          resetOroroCatalog();
+          Lampa.Storage.set('online_mod_ororo_status', 'limited');
+          return error('movies_subscription_required');
+        }
+
         ororoCatalogCache.credentials = credentials.fingerprint;
         ororoCatalogCache.expires = Date.now() + 1000 * 60 * 15;
         ororoCatalogCache.movies = json.movies;
@@ -12775,6 +12782,7 @@
         missing_password: 'online_mod_ororo_missing_password',
         invalid_credentials: 'online_mod_ororo_invalid_credentials',
         account_unavailable: 'online_mod_ororo_account_unavailable',
+        movies_subscription_required: 'online_mod_ororo_movies_subscription_required',
         not_found: 'online_mod_ororo_not_found',
         ambiguous: 'online_mod_ororo_ambiguous',
         series: 'online_mod_ororo_series',
@@ -12797,7 +12805,7 @@
         if (success) success();
       }, function (code) {
         if (request_id !== ororoSettingsRequestId) return;
-        if (code !== 'not_configured' && code !== 'missing_login' && code !== 'missing_password') Lampa.Storage.set('online_mod_ororo_status', 'error');
+        if (code !== 'not_configured' && code !== 'missing_login' && code !== 'missing_password') Lampa.Storage.set('online_mod_ororo_status', code === 'movies_subscription_required' ? 'limited' : 'error');
         if (error) error(code);
       });
     }
@@ -14606,7 +14614,7 @@
       };
     }
 
-    var mod_version = '22.08.2026.1';
+    var mod_version = '23.08.2026';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -15260,6 +15268,13 @@
           be: 'Гэты кантэнт недаступны бягучаму акаўнту Ororo або дасягнуты ліміт',
           en: 'This content is unavailable to the current Ororo account or its limit was reached',
           zh: 'This content is unavailable to the current Ororo account or its limit was reached'
+        },
+        online_mod_ororo_movies_subscription_required: {
+          ru: 'Для доступа к фильмам Ororo требуется активная платная подписка. Без неё аккаунту доступен только каталог сериалов',
+          uk: 'Для доступу до фільмів Ororo потрібна активна платна підписка. Без неї акаунту доступний лише каталог серіалів',
+          be: 'Для доступу да фільмаў Ororo патрэбна актыўная платная падпіска. Без яе акаўнту даступны толькі каталог серыялаў',
+          en: 'An active paid Ororo subscription is required for movies. Without it, the account can access only the series catalog',
+          zh: 'An active paid Ororo subscription is required for movies. Without it, the account can access only the series catalog'
         },
         online_mod_ororo_not_found: {
           ru: 'Фильм не найден в Ororo',
@@ -16161,7 +16176,7 @@
             $('.settings-param__value', ororo_login).text(credentials.login || placeholder);
             $('.settings-param__value', ororo_password).text(credentials.password ? '••••••' : placeholder);
             var status = Lampa.Storage.get('online_mod_ororo_status', '') + '';
-            $('.settings-param__status', ororo_check).removeClass('active error wait').addClass(status === 'ready' ? 'active' : status === 'error' ? 'error' : '');
+            $('.settings-param__status', ororo_check).removeClass('active error wait').addClass(status === 'ready' ? 'active' : status === 'error' || status === 'limited' ? 'error' : '');
           };
 
           var bindOroroInput = function bindOroroInput(element, key, password) {
