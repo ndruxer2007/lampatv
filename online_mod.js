@@ -12604,8 +12604,10 @@
 
     var ororoCatalogCache = {
       credentials: '',
-      expires: 0,
-      movies: null
+      moviesExpires: 0,
+      showsExpires: 0,
+      movies: null,
+      shows: null
     };
     var ororoCredentialsFingerprint = '';
     var ororoSettingsRequestId = 0;
@@ -12626,8 +12628,10 @@
 
     function resetOroroCatalog() {
       ororoCatalogCache.credentials = '';
-      ororoCatalogCache.expires = 0;
+      ororoCatalogCache.moviesExpires = 0;
+      ororoCatalogCache.showsExpires = 0;
       ororoCatalogCache.movies = null;
+      ororoCatalogCache.shows = null;
     }
 
     function invalidateOroroAuthorization() {
@@ -12746,7 +12750,7 @@
       var credentials_error = validateOroroCredentials(credentials);
       if (credentials_error) return error(credentials_error);
 
-      if (!force && ororoCatalogCache.credentials === credentials.fingerprint && ororoCatalogCache.expires > Date.now() && ororoCatalogCache.movies) {
+      if (!force && ororoCatalogCache.credentials === credentials.fingerprint && ororoCatalogCache.moviesExpires > Date.now() && ororoCatalogCache.movies) {
         success(ororoCatalogCache.movies);
         return;
       }
@@ -12761,7 +12765,7 @@
         }
 
         ororoCatalogCache.credentials = credentials.fingerprint;
-        ororoCatalogCache.expires = Date.now() + 1000 * 60 * 15;
+        ororoCatalogCache.moviesExpires = Date.now() + 1000 * 60 * 15;
         ororoCatalogCache.movies = json.movies;
         Lampa.Storage.set('online_mod_ororo_status', 'ready');
         success(json.movies);
@@ -12771,6 +12775,30 @@
           Lampa.Storage.set('online_mod_ororo_status', 'error');
         }
 
+        error(code);
+      });
+    }
+
+    function loadOroroShows(network, isCurrent, force, success, error) {
+      var credentials = getOroroCredentials();
+      var credentials_error = validateOroroCredentials(credentials);
+      if (credentials_error) return error(credentials_error);
+      if (!force && ororoCatalogCache.credentials === credentials.fingerprint && ororoCatalogCache.showsExpires > Date.now() && ororoCatalogCache.shows) return success(ororoCatalogCache.shows);
+      requestOroro(network, '/shows', isCurrent, function (json) {
+        var shows = json && json.shows;
+        if (!shows || !shows.forEach || !shows.length) {
+          ororoCatalogCache.showsExpires = 0;
+          ororoCatalogCache.shows = null;
+          Lampa.Storage.set('online_mod_ororo_status', 'error');
+          return error(!shows || !shows.forEach ? 'response_changed' : 'account_unavailable');
+        }
+        ororoCatalogCache.credentials = credentials.fingerprint;
+        ororoCatalogCache.showsExpires = Date.now() + 1000 * 60 * 15;
+        ororoCatalogCache.shows = shows;
+        Lampa.Storage.set('online_mod_ororo_status', 'ready');
+        success(shows);
+      }, function (code) {
+        if (code === 'invalid_credentials' || code === 'account_unavailable') Lampa.Storage.set('online_mod_ororo_status', 'error');
         error(code);
       });
     }
@@ -12785,7 +12813,10 @@
         movies_subscription_required: 'online_mod_ororo_movies_subscription_required',
         not_found: 'online_mod_ororo_not_found',
         ambiguous: 'online_mod_ororo_ambiguous',
-        series: 'online_mod_ororo_series',
+        series_not_found: 'online_mod_ororo_series_not_found',
+        season_empty: 'online_mod_ororo_season_empty',
+        episode_changed: 'online_mod_ororo_episode_changed',
+        episode_missing: 'online_mod_ororo_episode_missing',
         no_video: 'online_mod_ororo_no_video',
         response_changed: 'online_mod_ororo_response_changed',
         network_cors: 'online_mod_ororo_network_cors',
@@ -12806,6 +12837,11 @@
       }, function (code) {
         if (request_id !== ororoSettingsRequestId) return;
         if (code !== 'not_configured' && code !== 'missing_login' && code !== 'missing_password') Lampa.Storage.set('online_mod_ororo_status', code === 'movies_subscription_required' ? 'limited' : 'error');
+        if (code === 'movies_subscription_required' || code === 'account_unavailable') return loadOroroShows(ororoSettingsNetwork, function () {
+          return request_id === ororoSettingsRequestId;
+        }, true, function () {
+          if (request_id === ororoSettingsRequestId && success) success();
+        }, error);
         if (error) error(code);
       });
     }
@@ -12864,8 +12900,10 @@
       };
 
       add(movie.original_title, 500);
+      add(movie.original_name, 500);
       add(object.search, object.clarification ? 475 : 350);
       add(movie.title, 450);
+      add(movie.name, 450);
 
       if (movie.alternative_titles && movie.alternative_titles.results) {
         movie.alternative_titles.results.forEach(function (title) {
@@ -12939,6 +12977,40 @@
       };
     }
 
+    function ororoTmdbIds(object) {
+      var movie = object.movie || {};
+      var ids = [];
+      var add = function add(value) {
+        value = value == null ? '' : value + '';
+        if (/^\d+$/.test(value) && ids.indexOf(value) === -1) ids.push(value);
+      };
+      if (movie.source === 'tmdb' || object.source === 'tmdb') add(movie.id);
+      add(movie.tmdb_id || movie.tmdbId);
+      return ids;
+    }
+
+    function matchOroroShow(component, object, shows, imdb_ids) {
+      var tmdb_ids = ororoTmdbIds(object);
+      var by_tmdb = tmdb_ids.length ? shows.filter(function (show) {
+        return tmdb_ids.indexOf((show.tmdb_id || '') + '') !== -1;
+      }) : [];
+      if (by_tmdb.length === 1) return { show: by_tmdb[0] };
+      if (by_tmdb.length > 1) return { error: 'ambiguous' };
+      var by_imdb = (imdb_ids || []).length ? shows.filter(function (show) {
+        return imdb_ids.indexOf(normalizeOroroImdb(show.imdb_id)) !== -1;
+      }) : [];
+      if (by_imdb.length === 1) return { show: by_imdb[0] };
+      if (by_imdb.length > 1) return { error: 'ambiguous' };
+      var year = ororoMovieYear(object);
+      var titles = ororoMovieTitles(component, object);
+      var matched = shows.filter(function (show) {
+        var name = component.normalizeTitle((show.name || '') + '');
+        return titles.some(function (title) { return title.value === name; }) && (!year || parseInt(show.year) === year);
+      });
+      if (matched.length !== 1) return { error: matched.length ? 'ambiguous' : 'series_not_found' };
+      return { show: matched[0] };
+    }
+
     function isOroroSeries(object) {
       var movie = object.movie || {};
       return movie.media_type === 'tv' || movie.type === 'tv' || !!movie.name || !!movie.original_name || !!movie.first_air_date || !!movie.number_of_seasons;
@@ -12974,9 +13046,14 @@
 
     function ororo(component, _object) {
       var network = new Lampa.Reguest();
+      var playbackNetwork = new Lampa.Reguest();
       var object = _object;
       var request_id = 0;
+      var playback_id = 0;
       var select_title = '';
+      var series = null;
+      var filter_items = {};
+      var choice = { season: 0 };
 
       var current = function current(id) {
         return request_id === id;
@@ -12991,13 +13068,51 @@
       this.search = function (_object, external_id, data) {
         object = _object || object;
         var id = ++request_id;
+        playback_id++;
+        playbackNetwork.clear();
+        series = null;
+        filter_items = {};
+        choice = { season: choice.season || 0, season_num: choice.season_num };
         var imdb_ids = ororoImdbIds(object, external_id, data);
         network.clear();
         component.loading(true);
 
-        if (isOroroSeries(object)) return fail(id, 'series');
         var credentials_error = validateOroroCredentials(getOroroCredentials());
         if (credentials_error) return fail(id, credentials_error);
+        if (isOroroSeries(object)) return loadOroroShows(network, function () {
+          return current(id);
+        }, false, function (shows) {
+          var matched = matchOroroShow(component, object, shows, imdb_ids);
+          if (matched.error) return fail(id, matched.error);
+          requestOroro(network, '/shows/' + encodeURIComponent(matched.show.id), function () {
+            return current(id);
+          }, function (json) {
+            if (!current(id) || !json || !json.episodes || !json.episodes.forEach) return fail(id, 'response_changed');
+            var seasons = {};
+            var invalid = false;
+            json.episodes.forEach(function (episode) {
+              var season = parseInt(episode && episode.season);
+              var number = parseInt(episode && episode.number);
+              var episode_id = episode && episode.id;
+              if (season < 0 || isNaN(season) || number < 0 || isNaN(number) || !episode_id) return;
+              if (!seasons[season]) seasons[season] = [];
+              if (seasons[season].some(function (item) { return item.number === number; })) invalid = true;else seasons[season].push({
+                id: episode_id,
+                season: season,
+                number: number,
+                name: episode.name || ''
+              });
+            });
+            if (invalid || !Object.keys(seasons).length) return fail(id, invalid ? 'response_changed' : 'season_empty');
+            Object.keys(seasons).forEach(function (season) {
+              seasons[season].sort(function (a, b) { return a.number - b.number; });
+            });
+            series = { show: matched.show, seasons: seasons };
+            select_title = json.name || matched.show.name || object.movie.original_name || object.movie.name || object.movie.title;
+            filterSeries();
+            appendSeries(seriesEpisodes());
+          }, function (code) { fail(id, code); });
+        }, function (code) { fail(id, code); });
         loadOroroCatalog(network, function () {
           return current(id);
         }, false, function (movies) {
@@ -13032,17 +13147,98 @@
         });
       };
 
-      this.extendChoice = function () {};
+      this.extendChoice = function (saved) {
+        if (saved) Lampa.Arrays.extend(choice, saved, true);
+      };
 
       this.reset = function () {
-        this.search(object);
+        if (!series) return this.search(object);
+        playback_id++;
+        playbackNetwork.clear();
+        choice = { season: 0, season_num: 0 };
+        filterSeries();
+        appendSeries(seriesEpisodes());
+        component.saveChoice(choice);
+      };
+
+      this.filter = function (type, a, b) {
+        if (!series || a.stype !== 'season') return;
+        playback_id++;
+        playbackNetwork.clear();
+        choice.season = b.index;
+        choice.season_num = filter_items.season_num[b.index];
+        component.reset();
+        filterSeries();
+        appendSeries(seriesEpisodes());
+        component.saveChoice(choice);
       };
 
       this.destroy = function () {
         request_id++;
+        playback_id++;
         network.clear();
+        playbackNetwork.clear();
         network = null;
+        playbackNetwork = null;
       };
+
+      function filterSeries() {
+        var season_numbers = Object.keys(series.seasons).map(function (number) { return parseInt(number); }).sort(function (a, b) { return a - b; });
+        filter_items = { season: season_numbers.map(function (number) { return Lampa.Lang.translate('torrent_serial_season') + ' ' + number; }), season_num: season_numbers };
+        if (choice.season_num != null) {
+          var saved_index = season_numbers.indexOf(parseInt(choice.season_num));
+          if (saved_index !== -1) choice.season = saved_index;
+        }
+        if (!filter_items.season[choice.season]) choice.season = 0;
+        choice.season_num = filter_items.season_num[choice.season];
+        component.filter(filter_items, choice);
+      }
+
+      function seriesEpisodes() {
+        if (!series || !filter_items.season_num.length) return [];
+        var season = filter_items.season_num[choice.season];
+        return series.seasons[season] || [];
+      }
+
+      function appendSeries(items) {
+        component.reset();
+        if (!items.length) return component.empty(ororoErrorMessage('season_empty'));
+        var viewed = Lampa.Storage.cache('online_view', 5000, []);
+        items.forEach(function (episode) {
+          var title = component.formatEpisodeTitle(episode.season, episode.number) + (episode.name ? ' - ' + episode.name : '');
+          var element = { title: title, quality: 'HLS', info: '', season: episode.season, episode: episode.number };
+          var hash = Lampa.Utils.hash([select_title, episode.season, episode.number].join(':'));
+          var hash_file = Lampa.Utils.hash([select_title, 'ororo', episode.id].join(':'));
+          var view = Lampa.Timeline.view(hash);
+          element.timeline = view;
+          var item = Lampa.Template.get('online_mod', element);
+          item.append(Lampa.Timeline.render(view));
+          if (viewed.indexOf(hash_file) !== -1) item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+          item.on('hover:enter', function (event, options) {
+            var play_id = ++playback_id;
+            var search_id = request_id;
+            var active = function active() { return current(search_id) && play_id === playback_id; };
+            playbackNetwork.clear();
+            requestOroro(playbackNetwork, '/episodes/' + encodeURIComponent(episode.id), active, function (json, detail_url) {
+              if (!active() || !json || (json.id + '') !== (episode.id + '') || parseInt(json.season) !== episode.season || parseInt(json.number) !== episode.number) return active() && Lampa.Noty.show(ororoErrorMessage('episode_changed'));
+              var file = component.fixLink(json.url || '', detail_url);
+              if (!/^https?:\/\//i.test(file)) return Lampa.Noty.show(ororoErrorMessage('no_video'));
+              if (object.movie.id) Lampa.Favorite.add('history', object.movie, 100);
+              var first = { url: file, subtitles: normalizeOroroSubtitles(component, json.subtitles, detail_url), timeline: view, title: title };
+              if (options && options.runas) Lampa.Player.runas(options.runas);
+              Lampa.Player.play(first);
+              Lampa.Player.playlist([first]);
+              if (viewed.indexOf(hash_file) === -1) {
+                viewed.push(hash_file);
+                item.append('<div class="torrent-item__viewed">' + Lampa.Template.get('icon_star', {}, true) + '</div>');
+                Lampa.Storage.set('online_view', viewed);
+              }
+            }, function (code) { if (active()) Lampa.Noty.show(ororoErrorMessage(code === 'not_found' ? 'episode_missing' : code)); });
+          });
+          component.append(item);
+        });
+        component.start(true);
+      }
 
       function append(items) {
         component.reset();
@@ -14614,7 +14810,7 @@
       };
     }
 
-    var mod_version = '23.08.2026';
+    var mod_version = '23.08.2026.1';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
@@ -15290,19 +15486,40 @@
           en: 'Ororo returned several equally suitable movies. Refine the title or year',
           zh: 'Ororo returned several equally suitable movies. Refine the title or year'
         },
-        online_mod_ororo_series: {
-          ru: 'Сериалы Ororo будут поддержаны отдельным этапом. Сейчас доступны только фильмы',
-          uk: 'Серіали Ororo будуть підтримані окремим етапом. Зараз доступні лише фільми',
-          be: 'Серыялы Ororo будуць падтрыманы асобным этапам. Зараз даступныя толькі фільмы',
-          en: 'Ororo series will be supported in a separate stage. Only movies are available now',
-          zh: 'Ororo series will be supported in a separate stage. Only movies are available now'
+        online_mod_ororo_series_not_found: {
+          ru: 'Сериал не найден в Ororo',
+          uk: 'Серіал не знайдено в Ororo',
+          be: 'Серыял не знойдзены ў Ororo',
+          en: 'Series was not found in Ororo',
+          zh: 'Ororo series was not found'
+        },
+        online_mod_ororo_season_empty: {
+          ru: 'В Ororo нет доступных серий этого сезона',
+          uk: 'В Ororo немає доступних серій цього сезону',
+          be: 'У Ororo няма даступных серый гэтага сезона',
+          en: 'No episodes are available for this Ororo season',
+          zh: 'No episodes are available for this Ororo season'
+        },
+        online_mod_ororo_episode_changed: {
+          ru: 'Данные серии Ororo изменились. Обновите список и повторите',
+          uk: 'Дані серії Ororo змінилися. Оновіть список і повторіть',
+          be: 'Дадзеныя серыі Ororo змяніліся. Абнавіце спіс і паўтарыце',
+          en: 'The Ororo episode data changed. Refresh the list and retry',
+          zh: 'The Ororo episode data changed. Refresh the list and retry'
+        },
+        online_mod_ororo_episode_missing: {
+          ru: 'Выбранная серия недоступна в Ororo',
+          uk: 'Вибрана серія недоступна в Ororo',
+          be: 'Выбраная серыя недаступная ў Ororo',
+          en: 'The selected episode is unavailable in Ororo',
+          zh: 'The selected Ororo episode is unavailable'
         },
         online_mod_ororo_no_video: {
-          ru: 'Ororo не вернул доступный видеопоток для этого фильма',
-          uk: 'Ororo не повернув доступний відеопотік для цього фільму',
-          be: 'Ororo не вярнуў даступны відэапаток для гэтага фільма',
-          en: 'Ororo did not return an available video stream for this movie',
-          zh: 'Ororo did not return an available video stream for this movie'
+          ru: 'Ororo не вернул доступный видеопоток для этого контента',
+          uk: 'Ororo не повернув доступний відеопотік для цього вмісту',
+          be: 'Ororo не вярнуў даступны відэапаток для гэтага змесціва',
+          en: 'Ororo did not return an available video stream for this content',
+          zh: 'Ororo did not return an available video stream for this content'
         },
         online_mod_ororo_no_subtitles: {
           ru: 'без субтитров',
