@@ -23,7 +23,7 @@ test('build creates the expected readable bundle', async () => {
     build();
 
     const bundle = await readFile(resolve(repositoryDirectory, 'english_learning.js'), 'utf8');
-    assert.match(bundle, /English Learning for Lampa v0\.1\.0/);
+    assert.match(bundle, /English Learning for Lampa v0\.1\.1/);
     assert.match(bundle, /function start\(\)/);
     assert.match(bundle, /root\[namespace\]\.start\(\)/);
 });
