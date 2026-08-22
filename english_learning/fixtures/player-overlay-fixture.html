@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>English Learning overlay fixture</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Code-native visual fixture for manual browser review. The automated companion
+  test asserts both panel states and disabled state against the same geometry.
+  It intentionally contains no external assets or scripts.
+-->
+<style>
+  .player { position:relative; width:320px; height:180px; overflow:hidden; background:#111; color:#fff; }
+  .english-learning-subtitles { position:absolute; left:8%; right:8%; bottom:9%; max-height:5em; overflow:hidden; text-align:center; pointer-events:none; word-wrap:break-word; }
+  .player--panel-visible .english-learning-subtitles { bottom:18%; }
+  .english-learning-subtitles__russian { margin-top:4px; color:#ddd; font-size:.82em; }
+</style>
+<div class="player" aria-label="controls hidden"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__english">A deliberately long English subtitle line wraps in a small viewport without focus.</div><div class="english-learning-subtitles__russian">Русская строка</div></div></div>
+<div class="player player--panel-visible" aria-label="controls visible"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__english">English cue</div><div class="english-learning-subtitles__russian">Русская строка</div></div></div>
