@@ -1,4 +1,4 @@
-//22.08.2026 - Ororo movies
+//22.08.2026.1 - Ororo movie matching follow-up
 
 (function () {
     'use strict';
@@ -12807,6 +12807,30 @@
       return value || '';
     }
 
+    function ororoImdbIds(object, external_id, data) {
+      var result = [];
+
+      var add = function add(value) {
+        var normalized = normalizeOroroImdb(value);
+        if (normalized && result.indexOf(normalized) === -1) result.push(normalized);
+      };
+
+      if (data && data.forEach) {
+        data.forEach(function (card) {
+          if (card) add(card.imdb_id || card.imdbId);
+        });
+      }
+
+      if (/^tt\d+$/i.test(external_id == null ? '' : external_id + '')) add(external_id);
+
+      if (!result.length && !object.clarification) {
+        var movie = object.movie || {};
+        add(movie.imdb_id || movie.imdbId);
+      }
+
+      return result;
+    }
+
     function ororoMovieYear(object) {
       var movie = object.movie || {};
       var value = object.search_date || movie.release_date || movie.first_air_date || movie.year || '';
@@ -12844,11 +12868,10 @@
       return titles;
     }
 
-    function matchOroroMovie(component, object, movies) {
-      var movie = object.movie || {};
-      var imdb = normalizeOroroImdb(movie.imdb_id || movie.imdbId);
-      var by_imdb = imdb ? movies.filter(function (candidate) {
-        return normalizeOroroImdb(candidate.imdb_id || candidate.imdbId) === imdb;
+    function matchOroroMovie(component, object, movies, imdb_ids) {
+      imdb_ids = imdb_ids || ororoImdbIds(object);
+      var by_imdb = imdb_ids.length ? movies.filter(function (candidate) {
+        return imdb_ids.indexOf(normalizeOroroImdb(candidate.imdb_id || candidate.imdbId)) !== -1;
       }) : [];
       if (by_imdb.length === 1) return {
         movie: by_imdb[0]
@@ -12863,17 +12886,33 @@
       movies.forEach(function (candidate) {
         if (!candidate || !candidate.name) return;
         var name = component.normalizeTitle(candidate.name + '');
+        var candidate_year = parseInt(candidate.year);
         var title = titles.filter(function (item) {
           return item.value === name;
         }).sort(function (a, b) {
           return b.priority - a.priority;
         })[0];
+
+        var part_one_alias = false;
+
+        if (!title && year && candidate_year === year) {
+          var short_name = name.replace(/\s+part\s+(?:one|1|i)$/i, '').trim();
+
+          if (short_name && short_name !== name) {
+            title = titles.filter(function (item) {
+              return item.value === short_name;
+            }).sort(function (a, b) {
+              return b.priority - a.priority;
+            })[0];
+            part_one_alias = !!title;
+          }
+        }
+
         if (!title) return;
-        var candidate_year = parseInt(candidate.year);
         if (year && candidate_year && candidate_year !== year) return;
         ranked.push({
           movie: candidate,
-          score: title.priority + (year && candidate_year === year ? 1000 : 0)
+          score: title.priority + (year && candidate_year === year ? 1000 : 0) - (part_one_alias ? 25 : 0)
         });
       });
 
@@ -12941,9 +12980,10 @@
         component.empty(ororoErrorMessage(code));
       };
 
-      this.search = function (_object) {
+      this.search = function (_object, external_id, data) {
         object = _object || object;
         var id = ++request_id;
+        var imdb_ids = ororoImdbIds(object, external_id, data);
         network.clear();
         component.loading(true);
 
@@ -12954,7 +12994,7 @@
           return current(id);
         }, false, function (movies) {
           if (!current(id)) return;
-          var matched = matchOroroMovie(component, object, movies);
+          var matched = matchOroroMovie(component, object, movies, imdb_ids);
           if (matched.error) return fail(id, matched.error);
           requestOroro(network, '/movies/' + encodeURIComponent(matched.movie.id), function () {
             return current(id);
@@ -14566,7 +14606,7 @@
       };
     }
 
-    var mod_version = '22.08.2026';
+    var mod_version = '22.08.2026.1';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
