@@ -13088,29 +13088,34 @@
             return current(id);
           }, function (json) {
             if (!current(id) || !json || !json.episodes || !json.episodes.forEach) return fail(id, 'response_changed');
-            var seasons = {};
-            var invalid = false;
-            json.episodes.forEach(function (episode) {
-              var season = parseInt(episode && episode.season);
-              var number = parseInt(episode && episode.number);
-              var episode_id = episode && episode.id;
-              if (season < 0 || isNaN(season) || number < 0 || isNaN(number) || !episode_id) return;
-              if (!seasons[season]) seasons[season] = [];
-              if (seasons[season].some(function (item) { return item.number === number; })) invalid = true;else seasons[season].push({
-                id: episode_id,
-                season: season,
-                number: number,
-                name: episode.name || ''
+            try {
+              var seasons = {};
+              var invalid = false;
+              json.episodes.forEach(function (episode) {
+                var season = parseInt(episode && episode.season);
+                var number = parseInt(episode && episode.number);
+                var episode_id = episode && episode.id;
+                if (season < 0 || isNaN(season) || number < 0 || isNaN(number) || !episode_id) return;
+                if (!seasons[season]) seasons[season] = [];
+                if (seasons[season].some(function (item) { return item.number === number; })) invalid = true;else seasons[season].push({
+                  id: episode_id,
+                  season: season,
+                  number: number,
+                  name: episode.name || ''
+                });
               });
-            });
-            if (invalid || !Object.keys(seasons).length) return fail(id, invalid ? 'response_changed' : 'season_empty');
-            Object.keys(seasons).forEach(function (season) {
-              seasons[season].sort(function (a, b) { return a.number - b.number; });
-            });
-            series = { show: matched.show, seasons: seasons };
-            select_title = json.name || matched.show.name || object.movie.original_name || object.movie.name || object.movie.title;
-            filterSeries();
-            appendSeries(seriesEpisodes());
+              if (invalid || !Object.keys(seasons).length) return fail(id, invalid ? 'response_changed' : 'season_empty');
+              Object.keys(seasons).forEach(function (season) {
+                seasons[season].sort(function (a, b) { return a.number - b.number; });
+              });
+              series = { show: matched.show, seasons: seasons };
+              select_title = json.name || matched.show.name || object.movie.original_name || object.movie.name || object.movie.title;
+              component.loading(false);
+              filterSeries();
+              appendSeries(seriesEpisodes());
+            } catch (e) {
+              fail(id, 'response_changed');
+            }
           }, function (code) { fail(id, code); });
         }, function (code) { fail(id, code); });
         loadOroroCatalog(network, function () {
@@ -13123,22 +13128,27 @@
             return current(id);
           }, function (json, detail_url) {
             if (!current(id)) return;
-            if (!json || typeof json !== 'object') return fail(id, 'response_changed');
-            var file = component.fixLink(json.url || '', detail_url);
-            if (!/^https?:\/\//i.test(file)) return fail(id, 'no_video');
-            select_title = json.name || matched.movie.name || object.movie.original_title || object.movie.title;
-            var subtitles = normalizeOroroSubtitles(component, json.subtitles, detail_url);
-            var languages = subtitles ? subtitles.map(function (subtitle) {
-              return subtitle.lang.toUpperCase();
-            }) : [];
-            Lampa.Storage.set('online_mod_ororo_status', 'ready');
-            append([{
-              title: select_title,
-              quality: json.resolution || 'HLS',
-              info: languages.length ? ' / ' + languages.join(' / ') : ' / ' + Lampa.Lang.translate('online_mod_ororo_no_subtitles'),
-              file: file,
-              subtitles: subtitles
-            }]);
+            try {
+              if (!json || typeof json !== 'object') return fail(id, 'response_changed');
+              var file = component.fixLink(json.url || '', detail_url);
+              if (!/^https?:\/\//i.test(file)) return fail(id, 'no_video');
+              select_title = json.name || matched.movie.name || object.movie.original_title || object.movie.title;
+              var subtitles = normalizeOroroSubtitles(component, json.subtitles, detail_url);
+              var languages = subtitles ? subtitles.map(function (subtitle) {
+                return subtitle.lang.toUpperCase();
+              }) : [];
+              Lampa.Storage.set('online_mod_ororo_status', 'ready');
+              component.loading(false);
+              append([{
+                title: select_title,
+                quality: json.resolution || 'HLS',
+                info: languages.length ? ' / ' + languages.join(' / ') : ' / ' + Lampa.Lang.translate('online_mod_ororo_no_subtitles'),
+                file: file,
+                subtitles: subtitles
+              }]);
+            } catch (e) {
+              fail(id, 'response_changed');
+            }
           }, function (code) {
             fail(id, code === 'not_found' ? 'no_video' : code);
           });
@@ -14810,7 +14820,7 @@
       };
     }
 
-    var mod_version = '23.08.2026.1';
+    var mod_version = '23.08.2026.2';
     var isMSX = !!(window.TVXHost || window.TVXManager);
     var isTizen = navigator.userAgent.toLowerCase().indexOf('tizen') !== -1;
     var isIFrame = window.parent !== window;
