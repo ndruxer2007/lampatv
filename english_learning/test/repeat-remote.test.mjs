@@ -33,3 +33,8 @@ test('RepeatController offsets EN cue start, clamps it, and contains missing or 
 test('RemoteController accepts the documented event fallback and consumes it only after success', async () => {
   const { api } = await setup(); const keypad = events(), root = { Lampa: { Keypad: { listener: keypad } } }, repeat = { repeat: () => true }, remote = new api.RemoteController(root, repeat), event = key(403); assert.equal(remote.start(), true); keypad.send('keydown', { event }); assert.equal(event.prevented, 1); assert.equal(event.stopped, 1); remote.stop(); assert.equal(keypad.count('keydown'), 0);
 });
+
+test('RemoteController reset clears only repeat debounce state', async () => {
+  let now = 1000, repeats = 0; const { api } = await setup(), keypad = events(), root = { Lampa: { Keypad: { listener: keypad } }, Date: { now: () => now } }, remote = new api.RemoteController(root, { repeat() { repeats += 1; return true; } }); remote.start();
+  const first = key(403), blocked = key(403), afterReset = key(403); keypad.send('keydown', { code: 403, event: first }); keypad.send('keydown', { code: 403, event: blocked }); assert.equal(repeats, 1); assert.equal(blocked.prevented, 0); remote.reset(); keypad.send('keydown', { code: 403, event: afterReset }); assert.equal(repeats, 2); assert.equal(afterReset.prevented, 1); remote.stop();
+});

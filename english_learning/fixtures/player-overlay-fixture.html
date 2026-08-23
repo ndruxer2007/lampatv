@@ -9,11 +9,42 @@
   It intentionally contains no external assets or scripts.
 -->
 <style>
-  .player { position:relative; width:320px; height:180px; overflow:hidden; background:#111; color:#fff; }
-  /* At 320x180, 42% caps at 75px; a requested 40px dual line adapts to 31px. */
-  .english-learning-subtitles { position:absolute; left:8%; right:8%; bottom:9%; font-size:28px; max-height:75px; overflow:hidden; text-align:center; pointer-events:none; word-wrap:break-word; }
-  .player--panel-visible .english-learning-subtitles { bottom:18%; }
-  .english-learning-subtitles__russian { margin-top:4px; color:#ddd; font-size:.82em; }
+  .player { position:relative; overflow:hidden; background:linear-gradient(120deg,#eee,#147); color:#fff; margin-bottom:12px; }
+  .player--tv { width:1920px; height:1080px; }
+  .player--small { width:320px; height:180px; }
+  .english-learning-subtitles { position:absolute; left:6%; right:6%; bottom:6%; z-index:2; overflow:hidden; text-align:center; pointer-events:none; font-family:Arial,sans-serif; word-wrap:break-word; }
+  .player--panel-visible .english-learning-subtitles { bottom:20%; }
+  .english-learning-subtitles__plaque { display:inline-block; box-sizing:border-box; max-width:100%; overflow:hidden; padding:12px 20px; border-radius:6px; background:transparent; }
+  .player--tv .english-learning-subtitles__plaque { max-width:1600px; }
+  .backdrop--soft .english-learning-subtitles__plaque { background:rgba(0,0,0,.42); }
+  .backdrop--contrast .english-learning-subtitles__plaque { background:rgba(0,0,0,.68); }
+  .english-learning-subtitles__english { color:#FFD166; font-size:56px; line-height:1.15; font-weight:600; max-height:128px; overflow:hidden; text-shadow:-2px -2px 0 rgba(0,0,0,.88),2px -2px 0 rgba(0,0,0,.88),-2px 2px 0 rgba(0,0,0,.88),2px 2px 0 rgba(0,0,0,.88),0 3px 6px rgba(0,0,0,.95); }
+  .english-learning-subtitles__russian { margin-top:10px; color:#F5F5F5; font-size:40px; line-height:1.18; max-height:94px; overflow:hidden; text-shadow:-2px -2px 0 rgba(0,0,0,.88),2px -2px 0 rgba(0,0,0,.88),-2px 2px 0 rgba(0,0,0,.88),2px 2px 0 rgba(0,0,0,.88),0 3px 6px rgba(0,0,0,.95); }
+  .player--small .english-learning-subtitles { max-height:75px; }
+  .player--small.player--panel-visible .english-learning-subtitles { max-height:64px; }
+  .player--small .english-learning-subtitles__plaque { max-width:281px; max-height:75px; padding:4px 8px; }
+  .player--small.player--panel-visible .english-learning-subtitles__plaque { max-height:64px; }
+  .player--small .english-learning-subtitles__english { font-size:31px; line-height:1.15; max-height:71px; }
+  .player--small .english-learning-subtitles__russian { margin-top:4px; font-size:22px; line-height:1.18; max-height:51px; }
+  .player--small.player--panel-visible .english-learning-subtitles__english { font-size:25px; }
+  .player--small.player--panel-visible .english-learning-subtitles__russian { font-size:18px; }
+  .english-learning-pause-context { position:absolute; left:4%; top:162px; width:46vw; max-width:900px; max-height:430px; box-sizing:border-box; overflow:hidden; padding:18px; border-radius:8px; pointer-events:none; background:rgba(0,0,0,.58); font-family:Arial,sans-serif; }
+  .player--tv.player--panel-visible .english-learning-pause-context { max-height:300px; }
+  .english-learning-pause-context__entry + .english-learning-pause-context__entry { margin-top:12px; }
+  .english-learning-pause-context__timestamp { color:#B8B8B8; font-size:16px; line-height:1.1; }
+  .english-learning-pause-context__english { color:#FFD166; font-size:35px; line-height:1.15; max-height:80px; overflow:hidden; }
+  .english-learning-pause-context__russian { color:#F5F5F5; font-size:25px; line-height:1.18; max-height:59px; margin-top:4px; overflow:hidden; }
+  .player--small .english-learning-pause-context { left:4%; top:32px; width:92vw; max-width:92vw; max-height:68px; padding:8px; }
+  .player--small.has-current .english-learning-pause-context { display:none; }
+  .player--small .english-learning-pause-context__entry:first-child { display:none; }
+  .player--small .english-learning-pause-context__entry + .english-learning-pause-context__entry { margin-top:6px; }
+  .player--small .english-learning-pause-context__english { font-size:24px; max-height:55px; }
+  .player--small .english-learning-pause-context__russian { font-size:17px; max-height:40px; }
 </style>
-<div class="player" aria-label="controls hidden"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__english">A deliberately long English subtitle line wraps in a small viewport without focus.</div><div class="english-learning-subtitles__russian">Русская строка</div></div></div>
-<div class="player player--panel-visible" aria-label="controls visible"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__english">English cue</div><div class="english-learning-subtitles__russian">Русская строка</div></div></div>
+<div class="player player--tv player--panel-visible" aria-label="TV paused controls visible with coordinated panels"><div class="english-learning-pause-context" aria-hidden="true"><div class="english-learning-pause-context__entry"><div class="english-learning-pause-context__timestamp">00:18</div><div class="english-learning-pause-context__english">Long previous English line which may wrap to two lines</div><div class="english-learning-pause-context__russian">Длинная предыдущая русская строка в две строки</div></div></div><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">Long current English line which may wrap to two lines</div><div class="english-learning-subtitles__russian">Длинная текущая русская строка в две строки</div></div></div></div>
+<div class="player player--tv" aria-label="TV paused with context"><div class="english-learning-pause-context" aria-hidden="true"><div class="english-learning-pause-context__entry"><div class="english-learning-pause-context__timestamp">00:12</div><div class="english-learning-pause-context__english">Previous English phrase</div><div class="english-learning-pause-context__russian">Предыдущая русская фраза</div></div><div class="english-learning-pause-context__entry"><div class="english-learning-pause-context__timestamp">00:18</div><div class="english-learning-pause-context__english">Newest previous phrase</div><div class="english-learning-pause-context__russian">Последняя предыдущая фраза</div></div></div><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">Current paused phrase</div><div class="english-learning-subtitles__russian">Текущая фраза на паузе</div></div></div></div>
+<div class="player player--small player--panel-visible has-current" aria-label="small paused: context hidden when current plaque leaves insufficient room"><div class="english-learning-pause-context" aria-hidden="true"><div class="english-learning-pause-context__entry"><div class="english-learning-pause-context__timestamp">00:18</div><div class="english-learning-pause-context__english">Context safely hidden</div></div></div><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">Long current English line</div><div class="english-learning-subtitles__russian">Текущая длинная строка</div></div></div></div>
+<div class="player player--tv" aria-label="TV controls hidden"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">English is visually primary without a permanent band.</div><div class="english-learning-subtitles__russian">Русская строка вторична</div></div></div></div>
+<div class="player player--tv player--panel-visible backdrop--soft" aria-label="TV controls visible with Soft backdrop"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">English cue with controls visible</div><div class="english-learning-subtitles__russian">Мягкий локальный фон</div></div></div></div>
+<div class="player player--small backdrop--contrast" aria-label="small controls hidden with Contrast backdrop"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">Long English line</div><div class="english-learning-subtitles__russian">Контрастный локальный фон</div></div></div></div>
+<div class="player player--small player--panel-visible" aria-label="small controls visible"><div class="english-learning-subtitles" aria-hidden="true"><div class="english-learning-subtitles__plaque"><div class="english-learning-subtitles__english">English cue</div><div class="english-learning-subtitles__russian">Русская строка</div></div></div></div>

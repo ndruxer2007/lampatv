@@ -76,11 +76,13 @@ test('public PlayerVideo timeupdate is the default time source and is removed on
     api.configure({ enabled: true, transport: () => Promise.resolve(source) });
     events.send('ready', { subtitles: [track] });
     await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(videoEvents.count('timeupdate'), 1);
+    assert.equal(videoEvents.count('timeupdate'), 2);
+    assert.equal(videoEvents.count('pause'), 1);
+    assert.equal(videoEvents.count('play'), 1);
     videoEvents.send('timeupdate', { duration: 20, current: 2 });
     assert.equal(api.getState().prototype.cueId, '1');
     events.send('destroy', {});
-    assert.equal(videoEvents.count('timeupdate'), 1);
+    assert.equal(videoEvents.count('timeupdate'), 2);
     api.destroy();
     assert.equal(videoEvents.count('timeupdate'), 0);
 });
@@ -145,7 +147,9 @@ test('ten Player destroy cycles preserve shell listeners until explicit plugin u
         assert.equal(events.count('destroy'), 1);
         assert.equal(events.count('create'), 1);
         assert.equal(events.count('external'), 1);
-        assert.equal(videoEvents.count('timeupdate'), 1);
+        assert.equal(videoEvents.count('timeupdate'), 2);
+        assert.equal(videoEvents.count('pause'), 1);
+        assert.equal(videoEvents.count('play'), 1);
     }
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(host.children.length, 0);
@@ -155,4 +159,6 @@ test('ten Player destroy cycles preserve shell listeners until explicit plugin u
     assert.equal(events.count('create'), 0);
     assert.equal(events.count('external'), 0);
     assert.equal(videoEvents.count('timeupdate'), 0);
+    assert.equal(videoEvents.count('pause'), 0);
+    assert.equal(videoEvents.count('play'), 0);
 });

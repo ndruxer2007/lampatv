@@ -49,6 +49,7 @@ test('shell is idempotent and removes its Player listeners', async () => {
 
 test('re-evaluating the bundle replaces its callbacks without accumulation', async () => {
     const listeners = { ready: [], destroy: [], create: [], external: [] };
+    const videoListeners = { timeupdate: [], pause: [], play: [] };
     const player = {
         listener: {
             follow(type, callback) { listeners[type].push(callback); },
@@ -58,7 +59,8 @@ test('re-evaluating the bundle replaces its callbacks without accumulation', asy
             }
         }
     };
-    const context = { Lampa: { Player: player } };
+    const video = { listener: { follow(type, callback) { videoListeners[type].push(callback); }, remove(type, callback) { const index = videoListeners[type].indexOf(callback); if (index !== -1) videoListeners[type].splice(index, 1); } } };
+    const context = { Lampa: { Player: player, PlayerVideo: video } };
     const firstPlugin = await runBundle(context);
     const secondPlugin = await runBundle(context);
 
@@ -67,4 +69,11 @@ test('re-evaluating the bundle replaces its callbacks without accumulation', asy
     assert.equal(secondPlugin.getState().started, true);
     assert.equal(listeners.ready.length, 1);
     assert.equal(listeners.destroy.length, 1);
+    assert.equal(videoListeners.timeupdate.length, 2);
+    assert.equal(videoListeners.pause.length, 1);
+    assert.equal(videoListeners.play.length, 1);
+    secondPlugin.destroy();
+    assert.equal(videoListeners.timeupdate.length, 0);
+    assert.equal(videoListeners.pause.length, 0);
+    assert.equal(videoListeners.play.length, 0);
 });

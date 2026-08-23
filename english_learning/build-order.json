@@ -3,7 +3,11 @@
   "src/10-subtitle-core.js",
   "src/15-settings.js",
   "src/16-track-resolver.js",
+  "src/17-subtitle-layout-policy.js",
   "src/17-dual-subtitle-overlay.js",
+  "src/18-player-panel-button.js",
+  "src/18-context-history-builder.js",
+  "src/19-pause-context.js",
   "src/20-player-prototype.js",
   "src/21-repeat-remote.js",
   "src/90-bootstrap.js"
