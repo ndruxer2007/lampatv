@@ -13,7 +13,7 @@
 }(typeof window !== 'undefined' ? window : globalThis, function (root) {
     'use strict';
 
-    var version = '0.1.0';
+    var version = '0.2.0';
     var storageKey = 'animevost_schedule_proxy';
     var apiUrl = 'https://api.animetop.info/v1/last';
     var days = [
@@ -68,6 +68,9 @@
                 key: 'anime-' + item.id,
                 title: fullTitle.split(' / ')[0].replace(/\s*\[[^\]]*\]/g, '').trim() || fullTitle,
                 fullTitle: fullTitle,
+                originalTitle: (fullTitle.split(' / ')[1] || '').replace(/\s*\[[^\]]*\]/g, '').trim(),
+                year: /^\d{4}$/.test(String(item.year || '')) ? String(item.year) : '',
+                media: item.type === 'ТВ' ? 'tv' : '',
                 info: labels.join(' · ') || 'Сведения о сериях не указаны',
                 description: text(item.description),
                 poster: safeUrl(item.urlImagePreview)
@@ -107,6 +110,119 @@
         });
     }
 
+    function searchNames(card, query) {
+        var result = [];
+        (query ? [query] : [card.title, card.originalTitle]).forEach(function (value) {
+            var name = text(value).replace(/\[[^\]]*\]/g, '').replace(/[<>\x00-\x1f\x7f]/g, ' ')
+                .replace(/\s*\([^)]*(?:сезон|часть)[^)]*\)\s*$/i, '')
+                .replace(/\s+(?:(?:season|part)\s*\d+|\d+(?:st|nd|rd|th)\s+season|[IVX]{2,})\s*$/i, '')
+                .replace(/\s+/g, ' ').trim().slice(0, 200);
+            if (name && result.indexOf(name) === -1) result.push(name);
+        });
+        return result.slice(0, 2);
+    }
+
+    function titleIdentity(value) {
+        return text(value).toLowerCase().replace(/ё/g, 'е').replace(/[\s.,!?:;'"«»()[\]{}_\-–—/\\]+/g, '');
+    }
+
+    function parseMatches(json, method) {
+        if (!json || !Array.isArray(json.results) || ['tv', 'movie'].indexOf(method) === -1) {
+            throw new Error('Неизвестный формат ответа каталога Lampa.');
+        }
+        return json.results.slice(0, 20).map(function (item) {
+            if (!item || !/^\d+$/.test(String(item.id)) || !isFinite(Number(item.id)) ||
+                Number(item.id) < 1 || Number(item.id) > 9007199254740991 || !text(method === 'tv' ? item.name : item.title)) {
+                throw new Error('Каталог вернул неполную карточку.');
+            }
+            // Only metadata fields used by the native card; never copy an arbitrary source object.
+            var data = { id: Number(item.id), source: 'tmdb' };
+            ['name', 'title', 'original_name', 'original_title', 'poster_path', 'backdrop_path', 'overview',
+                'first_air_date', 'release_date', 'original_language'].forEach(function (field) {
+                if (typeof item[field] === 'string') data[field] = text(item[field]).replace(/[<>]/g, '');
+            });
+            if (!(method === 'tv' ? data.name : data.title).trim()) throw new Error('Пустое название карточки.');
+            var date = method === 'tv' ? data.first_air_date : data.release_date;
+            return { key: 'tmdb-' + method + '-' + data.id, method: method, data: data,
+                title: method === 'tv' ? data.name : data.title,
+                originalTitle: method === 'tv' ? data.original_name : data.original_title,
+                year: /^\d{4}-\d{2}-\d{2}$/.test(date || '') ? date.slice(0, 4) : '',
+                animation: Array.isArray(item.genre_ids) && item.genre_ids.indexOf(16) !== -1 };
+        });
+    }
+
+    function automaticMatch(card, matches, complete) {
+        // A continuation's year may be unrelated to the native series' first year.
+        var continuation = [card.title, card.originalTitle, card.fullTitle].some(function (value) {
+            return /сезон|часть|\bseason\b|\bpart\b|\b[IVX]{2,}\s*$/i.test((value || '').replace(/\[[^\]]*\]/g, '').trim());
+        });
+        if (!complete || !card.year || !card.media || continuation) return null;
+        var names = [card.title, card.originalTitle].map(titleIdentity).filter(Boolean);
+        var exact = matches.filter(function (item) {
+            return item.method === card.media && item.year === card.year && item.animation &&
+                [item.title, item.originalTitle].some(function (name) { return name && names.indexOf(titleIdentity(name)) !== -1; });
+        });
+        return exact.length === 1 ? exact[0] : null;
+    }
+
+    function resolveCard(card, adapter, callback, options) {
+        card = card && typeof card === 'object' ? card : {};
+        options = options || {};
+        var clock = options.clock || root;
+        var finished = false;
+        var timer;
+        var rows = [];
+        var failures = 0;
+        var complete = true;
+        var remaining = 0;
+        function cancel() { finished = true; if (timer !== undefined) clock.clearTimeout(timer); }
+        function finish(message) {
+            if (finished) return;
+            cancel();
+            callback({ matches: rows, error: message || '', partial: failures > 0,
+                automatic: automaticMatch(card, rows, complete && !failures && !options.query) });
+        }
+        try {
+            if (!adapter || typeof adapter.get !== 'function') {
+                finish('Поиск TMDB недоступен в этой сборке Lampa.'); return cancel;
+            }
+            var names = searchNames(card, options.query);
+            if (!names.length) { finish('Укажите название для поиска карточки.'); return cancel; }
+            var methods = card.media === 'tv' || card.media === 'movie' ? [card.media] : ['tv', 'movie'];
+            var jobs = [];
+            names.forEach(function (name) { methods.forEach(function (method) { jobs.push({ name: name, method: method }); }); });
+            remaining = jobs.length;
+            timer = clock.setTimeout(function () {
+                failures++; complete = false; finish('Поиск не завершился вовремя. Можно повторить запрос.');
+            }, 15000);
+            jobs.forEach(function (job) {
+                if (finished) return;
+                var settled = false;
+                function done(json, failed) {
+                    if (finished || settled) return;
+                    settled = true;
+                    if (!failed) {
+                        try {
+                            var found = parseMatches(json, job.method);
+                            if (json.total_pages == null || Number(json.total_pages) < 0 || Number(json.total_pages) > 1 ||
+                                Math.floor(Number(json.total_pages)) !== Number(json.total_pages) || Number(json.page) !== 1 || json.results.length > 20) complete = false;
+                            found.forEach(function (item) {
+                                if (!rows.some(function (old) { return old.key === item.key; })) rows.push(item);
+                            });
+                        } catch (error) { failed = true; }
+                    }
+                    if (failed) failures++;
+                    if (--remaining === 0) finish(failures ? (rows.length ? 'Часть поиска недоступна. Проверьте выбранный тайтл.' : 'Не удалось получить карточки TMDB. Повторите запрос или уточните название.') : '');
+                }
+                try { adapter.get('search/' + job.method, { query: encodeURIComponent(job.name), page: 1 },
+                    function (json) { done(json, false); }, function () { done(null, true); }); }
+                catch (error) { done(null, true); }
+            });
+        } catch (error) { failures++; finish('Поиск TMDB недоступен в этой сборке Lampa.'); }
+        // Do not call adapter.clear(): its request queue belongs to the whole Lampa runtime.
+        return cancel;
+    }
+
     function supported(lampa) {
         function has(object, names) {
             return object && names.every(function (name) { return typeof object[name] === 'function'; });
@@ -143,7 +259,11 @@
         var Lampa = root.Lampa;
         var $ = root.jQuery;
         var self = this;
-        var mode = ['home', 'updates', 'schedule'].indexOf(object.animevost_view) !== -1 ? object.animevost_view : 'home';
+        var mode = ['home', 'updates', 'schedule', 'match'].indexOf(object.animevost_view) !== -1 ? object.animevost_view : 'home';
+        var sourceCard = object.animevost_card && typeof object.animevost_card === 'object' ? object.animevost_card : {};
+        var matches = [];
+        var query = '';
+        var cancelResolve = null;
         var chosenDay = days.some(function (day) { return day[0] === object.animevost_day; }) ? object.animevost_day : '';
         var html = $('<div class="animevost"></div>');
         var body = $('<div class="animevost__body"></div>');
@@ -263,12 +383,64 @@
 
         function detail(card) {
             var content = $('<div class="animevost__detail"><div class="animevost__detail-title"></div><p class="animevost__detail-info"></p><div class="animevost__description"></div></div>');
-            content.find('.animevost__detail-title').text(card.fullTitle);
-            content.find('.animevost__detail-info').text(card.info);
+            content.find('.animevost__detail-title').text(card.fullTitle || card.title || 'Аниме');
+            content.find('.animevost__detail-info').text(card.info || 'Сведения о сериях не указаны');
             content.find('.animevost__description').text(card.description || 'Описание источником не предоставлено.');
             modalContent = content;
             modalOptions = { title: 'Animevost', html: content, size: 'large', mask: true, onBack: function () { releaseDetail(true); } };
             Lampa.Modal.open(modalOptions);
+        }
+
+        function openFull(match) {
+            if (!current() || !matches.some(function (item) { return item === match; })) return;
+            lastKey = match.key;
+            try {
+                Lampa.Activity.push({ url: '', title: match.title, component: 'full', id: match.data.id,
+                    method: match.method, card: match.data, source: 'tmdb' });
+            } catch (error) {
+                if (current()) { errorText = 'Не удалось открыть стандартную карточку Lampa.'; render(); }
+            }
+        }
+
+        function findCard(card) {
+            Lampa.Activity.push({ url: '', title: 'Animevost — карточка Lampa', component: 'animevost',
+                animevost_view: 'match', animevost_card: card, page: 1 });
+        }
+
+        function clarify() {
+            var previous = query || searchNames(sourceCard)[0] || '';
+            Lampa.Input.edit({ title: 'Название аниме для поиска', value: previous, free: true, nosave: true, nomic: true }, function (value) {
+                if (!current()) return;
+                self.start();
+                value = typeof value === 'string' ? value.trim() : '';
+                if (!value || value === previous) return;
+                query = value;
+                loadMatch();
+            });
+        }
+
+        function loadMatch() {
+            if (!current() || busy) return;
+            cancel();
+            var token = ++generation;
+            busy = true;
+            loaded = false;
+            errorText = '';
+            matches = [];
+            lastKey = '';
+            render();
+            var adapter;
+            try { adapter = Lampa.Api && Lampa.Api.sources && Lampa.Api.sources.tmdb; } catch (error) {}
+            cancelResolve = resolveCard(sourceCard, adapter, function (result) {
+                if (!current() || token !== generation) return;
+                busy = false;
+                loaded = true;
+                matches = result.matches;
+                errorText = result.error;
+                if (lastKey !== 'source-info') lastKey = '';
+                render();
+                if (result.automatic && ownsController()) openFull(result.automatic);
+            }, { query: query });
         }
 
         function addCard(card) {
@@ -283,16 +455,32 @@
                 image.attr('src', card.poster);
                 item.find('.animevost__poster').append(image);
             }
-            bind(item, card.key, function () { detail(card); });
+            bind(item, card.key, function () { findCard(card); });
             body.append(item);
         }
 
         function render() {
             if (destroyed) return;
             body.empty();
-            var title = mode === 'home' ? 'Animevost' : mode === 'updates' ? 'Последние обновления' : 'Расписание';
+            var title = mode === 'home' ? 'Animevost' : mode === 'updates' ? 'Последние обновления' : mode === 'match' ? 'Карточка Lampa' : 'Расписание';
             body.append($('<h2 class="animevost__heading"></h2>').text(title));
-            if (mode === 'home') {
+            if (mode === 'match') {
+                body.append($('<p class="animevost__note"></p>').text(sourceCard.title || 'Аниме'));
+                if (busy) body.append($('<p class="animevost__status" role="status"></p>').text('Поиск карточки в Lampa…'));
+                else if (loaded && !matches.length && !errorText) body.append($('<p class="animevost__note"></p>').text('Совпадений не найдено. Попробуйте другое название.'));
+                if (errorText) body.append($('<p class="animevost__error" role="status"></p>').text(errorText));
+                if (matches.length) body.append($('<p class="animevost__note"></p>').text('Выберите карточку из первых результатов или уточните название. Продолжение может находиться в общей карточке сериала.'));
+                matches.forEach(function (match) {
+                    addAction(match.key, match.title, (match.method === 'tv' ? 'Сериал' : 'Фильм') + ' · ' +
+                        (match.year || 'Год не указан') + ' · TMDB' + (match.originalTitle ? ' · ' + match.originalTitle : ''),
+                        function () { openFull(match); }, true);
+                });
+                addAction('retry-match', busy ? 'Поиск…' : 'Повторить поиск', '', loadMatch);
+                if (!busy) {
+                    addAction('clarify', 'Уточнить название', query || searchNames(sourceCard)[0] || '', clarify);
+                }
+                addAction('source-info', 'Информация Animevost', 'Название, серии и описание источника', function () { detail(sourceCard); });
+            } else if (mode === 'home') {
                 addAction('updates', 'Последние обновления', 'Доступные серии в порядке ленты Animevost', function () { push('updates', 'Animevost — обновления'); }, true);
                 addAction('schedule', 'Расписание', 'Примерное время русской озвучки, МСК', function () { push('schedule', 'Animevost — расписание'); });
                 addAction('configure', 'Настроить расписание', 'Адрес собственного HTTPS Worker · ' + version, configure);
@@ -332,6 +520,7 @@
 
         function cancel() {
             generation++;
+            if (cancelResolve) { cancelResolve(); cancelResolve = null; }
             try { network.clear(); } catch (error) {} // Callback invalidation, not transport abort.
             busy = false;
         }
@@ -412,9 +601,12 @@
                 back: function () { Lampa.Activity.backward(); }
             });
             Lampa.Controller.toggle('content');
-            if (!loaded && !busy && mode !== 'home' && !errorText) load();
+            if (!loaded && !busy && mode !== 'home' && !errorText) {
+                if (mode === 'match') loadMatch();
+                else load();
+            }
         };
-        this.pause = function () {};
+        this.pause = function () { cancel(); render(); };
         this.stop = function () { cancel(); render(); };
         this.render = function () { return html; };
         this.destroy = function () {
@@ -426,6 +618,8 @@
             html.remove();
             cards = [];
             schedule = [];
+            matches = [];
+            sourceCard = {};
         };
     }
 
@@ -472,7 +666,8 @@
     }
 
     return { version: version, text: text, safeUrl: safeUrl, proxyAddress: proxyAddress,
-        parseFeed: parseFeed, parseSchedule: parseSchedule, supported: supported, Component: Component, install: install };
+        parseFeed: parseFeed, parseSchedule: parseSchedule, searchNames: searchNames, parseMatches: parseMatches,
+        automaticMatch: automaticMatch, resolveCard: resolveCard, supported: supported, Component: Component, install: install };
 }));
 
 /* Full license text follows; no separate public file is required.
