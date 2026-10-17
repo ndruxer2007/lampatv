@@ -13,7 +13,7 @@
 }(typeof window !== 'undefined' ? window : globalThis, function (root) {
     'use strict';
 
-    var version = '0.2.1';
+    var version = '0.2.2';
     var storageKey = 'animevost_schedule_proxy';
     var apiUrl = 'https://api.animetop.info/v1/last';
     var days = [
@@ -351,7 +351,7 @@
                 Lampa.Select.show({ title: 'Сохранить адрес расписания?',
                     items: [{ title: 'Сохранить', save: true }, { title: 'Отменить' }],
                     onSelect: function (item) {
-                        Lampa.Select.close();
+                        // Select hides before onSelect; close() would invoke onBack again.
                         if (!current()) return;
                         if (item.save) {
                             Lampa.Storage.set(storageKey, value);
@@ -364,7 +364,7 @@
                         render();
                         if (item.save && mode === 'schedule' && value) load();
                     },
-                    onBack: function () { Lampa.Select.close(); if (current()) self.start(); }
+                    onBack: function () { if (current()) self.start(); }
                 });
             });
         }
