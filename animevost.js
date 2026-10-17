@@ -13,7 +13,7 @@
 }(typeof window !== 'undefined' ? window : globalThis, function (root) {
     'use strict';
 
-    var version = '0.2.0';
+    var version = '0.2.1';
     var storageKey = 'animevost_schedule_proxy';
     var apiUrl = 'https://api.animetop.info/v1/last';
     var days = [
@@ -223,7 +223,7 @@
         return cancel;
     }
 
-    function supported(lampa) {
+    function supported(lampa, probeInstances) {
         function has(object, names) {
             return object && names.every(function (name) { return typeof object[name] === 'function'; });
         }
@@ -234,7 +234,8 @@
             has(lampa.Modal, ['open', 'close']) && has(lampa.Storage, ['get', 'set']) &&
             has(lampa.Input, ['edit']) && has(lampa.Select, ['show', 'close']) &&
             typeof lampa.Scroll === 'function' && typeof lampa.Reguest === 'function');
-        if (!valid) return false;
+        // Keep startup passive; inspect instance APIs only when Animevost is opened.
+        if (!valid || !probeInstances) return valid;
         var scroll;
         var result = false;
         try {
@@ -650,6 +651,12 @@
                 );
                 Lampa.Component.add('animevost', Component);
                 button.on('hover:enter', function () {
+                    if (!supported(Lampa, true)) {
+                        if (Lampa.Noty && typeof Lampa.Noty.show === 'function') {
+                            Lampa.Noty.show('Animevost недоступен: несовместимые Scroll/Reguest в этой сборке Lampa.');
+                        }
+                        return;
+                    }
                     Lampa.Activity.push({ url: '', title: 'Animevost', component: 'animevost', animevost_view: 'home', page: 1 });
                 });
                 $('head').append(style);
