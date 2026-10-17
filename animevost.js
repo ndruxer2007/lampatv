@@ -13,7 +13,7 @@
 }(typeof window !== 'undefined' ? window : globalThis, function (root) {
     'use strict';
 
-    var version = '0.2.2';
+    var version = '0.3.0';
     var storageKey = 'animevost_schedule_proxy';
     var apiUrl = 'https://api.animetop.info/v1/last';
     var days = [
@@ -22,6 +22,7 @@
     ];
     var installed = false;
     var readyHandler;
+    var scheduleCache = [];
 
     function text(value) {
         return (typeof value === 'string' ? value : '').replace(/<(script|style|iframe)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
@@ -103,11 +104,54 @@
                 var title = suffix ? label.slice(0, suffix.index).trim() : label;
                 var time = suffix ? suffix[1].trim() : '';
                 if (!title) throw new Error('Пустое название в расписании источника.');
-                cards.push({ key: day[0] + '-' + i, title: title, fullTitle: title,
+                var id = new root.URL(url).pathname.match(/\/(\d+)-[^/]+\.html$/);
+                var sourceId = id && Number(id[1]) > 0 && Number(id[1]) <= 9007199254740991 ? id[1] : '';
+                var baseKey = day[0] + '-' + (sourceId || 'row-' + i);
+                var occurrence = cards.filter(function (card) { return card.sourceId && card.sourceId === sourceId; }).length;
+                cards.push({ key: baseKey + (sourceId && occurrence ? '-' + occurrence : ''), title: title, fullTitle: title,
+                    sourceId: sourceId, sourceUrl: url, time: time, minutes: scheduleMinutes(time),
                     info: day[1] + ' · ' + (time || 'Время не указано'), description: '', poster: '' });
             }
-            return { key: day[0], title: day[1], cards: cards };
+            return { key: day[0], title: day[1], cards: sortScheduleCards(cards) };
         });
+    }
+
+    function scheduleMinutes(value) {
+        var match = typeof value === 'string' && value.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+        return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+    }
+
+    function sortScheduleCards(cards) {
+        return cards.map(function (card, index) { return { card: card, index: index }; }).sort(function (a, b) {
+            var am = typeof a.card.minutes === 'number' && isFinite(a.card.minutes) && a.card.minutes >= 0 && a.card.minutes < 1440 ? a.card.minutes : 1440;
+            var bm = typeof b.card.minutes === 'number' && isFinite(b.card.minutes) && b.card.minutes >= 0 && b.card.minutes < 1440 ? b.card.minutes : 1440;
+            return am - bm || a.index - b.index;
+        }).map(function (entry) { return entry.card; });
+    }
+
+    function moscowClock(value) {
+        var now = value === undefined ? Date.now() : value;
+        if (typeof now !== 'number' || !isFinite(now)) return null;
+        var date = new Date(now + 3 * 60 * 60 * 1000);
+        if (!isFinite(date.getTime())) return null;
+        return { dayIndex: (date.getUTCDay() + 6) % 7, minutes: date.getUTCHours() * 60 + date.getUTCMinutes() };
+    }
+
+    function scheduleElapsed(dayKey, card, now) {
+        var clock = moscowClock(now);
+        var dayIndex = days.map(function (day) { return day[0]; }).indexOf(dayKey);
+        return !!(clock && dayIndex !== -1 && typeof card.minutes === 'number' && card.minutes >= 0 && card.minutes < 1440 &&
+            (dayIndex < clock.dayIndex || (dayIndex === clock.dayIndex && card.minutes <= clock.minutes)));
+    }
+
+    function scheduleMetadata(payload, sourceId) {
+        var json = typeof payload === 'string' ? JSON.parse(payload) : payload;
+        if (!/^\d+$/.test(String(sourceId)) || Number(sourceId) <= 0 || Number(sourceId) > 9007199254740991 || !json || !json.state || json.state.status !== 'ok' || !Array.isArray(json.data)) return null;
+        var item = json.data.filter(function (entry) { return entry && /^\d+$/.test(String(entry.id)) && Number(entry.id) <= 9007199254740991 && Number(entry.id) === Number(sourceId); })[0];
+        if (!item) return null;
+        var fullTitle = text(item.title);
+        return { poster: safeUrl(item.urlImagePreview), originalTitle: (fullTitle.split(' / ')[1] || '').replace(/\s*\[[^\]]*\]/g, '').trim(),
+            year: /^\d{4}$/.test(String(item.year || '')) ? String(item.year) : '', media: item.type === 'ТВ' ? 'tv' : '' };
     }
 
     function searchNames(card, query) {
@@ -265,7 +309,15 @@
         var matches = [];
         var query = '';
         var cancelResolve = null;
-        var chosenDay = days.some(function (day) { return day[0] === object.animevost_day; }) ? object.animevost_day : '';
+        var preferredDay = days.some(function (day) { return day[0] === object.animevost_day; }) ? object.animevost_day : '';
+        var scheduleInitialDone = false;
+        var posterJobs = [];
+        var posterQueue = [];
+        var posterAttempted = {};
+        var posterNodes = {};
+        var posterGeneration = 0;
+        var running = false;
+        var weekNow = Date.now();
         var html = $('<div class="animevost"></div>');
         var body = $('<div class="animevost__body"></div>');
         var scroll = new Lampa.Scroll({ mask: true, over: true, step: 250 });
@@ -320,6 +372,7 @@
             item.on('hover:focus', function () {
                 lastKey = key;
                 scroll.update(item);
+                if (mode === 'schedule') requestVisiblePosters(key);
             }).on('hover:hover', function () {
                 lastKey = key;
             }).on('hover:enter', function () {
@@ -356,8 +409,10 @@
                         if (item.save) {
                             Lampa.Storage.set(storageKey, value);
                             loaded = false;
+                            scheduleInitialDone = false;
                             schedule = [];
                             cancel();
+                            posterAttempted = {};
                             errorText = '';
                         }
                         self.start();
@@ -444,24 +499,118 @@
             }, { query: query });
         }
 
-        function addCard(card) {
+        function paintPoster(card, item) {
+            if (!card.poster || item.find('img').length) return;
+            var image = $('<img alt="">');
+            image.on('error', function () { image.siblings('span').show(); image.remove(); }).on('load', function () { image.siblings('span').hide(); });
+            image.attr('src', card.poster);
+            item.find('.animevost__poster').append(image);
+        }
+
+        function addCard(card, target, dayKey) {
             var item = $('<div class="animevost__card selector"><div class="animevost__poster"><span>Нет постера</span></div><div class="animevost__card-body"><div class="animevost__title"></div><div class="animevost__meta"></div></div></div>');
             item.attr('data-animevost-key', card.key).attr('data-animevost-primary', 'true');
             item.find('.animevost__title').text(card.title);
             item.find('.animevost__meta').text(card.info);
-            if (mode !== 'updates') item.addClass('animevost__card--schedule');
-            else if (card.poster) {
-                var image = $('<img alt="">');
-                image.on('error', function () { image.remove(); }).on('load', function () { image.siblings('span').hide(); });
-                image.attr('src', card.poster);
-                item.find('.animevost__poster').append(image);
+            if (mode === 'schedule') {
+                item.addClass('animevost__card--schedule');
+                posterNodes[card.key] = item;
+                if (scheduleElapsed(dayKey, card, weekNow)) {
+                    item.addClass('animevost__card--elapsed');
+                    item.find('.animevost__card-body').append($('<div class="animevost__badge"></div>').text('Время по расписанию прошло'));
+                }
             }
+            paintPoster(card, item);
             bind(item, card.key, function () { findCard(card); });
-            body.append(item);
+            (target && target.jquery ? target : body).append(item);
+        }
+
+        function stopPosters() {
+            posterGeneration++;
+            posterJobs.forEach(function (job) { try { job.network.clear(); } catch (error) {} });
+            posterJobs = [];
+            posterQueue = [];
+        }
+
+        function applyMetadata(card, metadata) {
+            if (!metadata) return;
+            card.poster = metadata.poster;
+            card.originalTitle = metadata.originalTitle;
+            card.year = metadata.year;
+            card.media = metadata.media;
+            var item = posterNodes[card.key];
+            if (item && item.length) paintPoster(card, item);
+        }
+
+        function drainPosters() {
+            while (running && current() && posterJobs.length < 2 && posterQueue.length) {
+                (function (card) {
+                    var token = posterGeneration;
+                    var job = { network: null, done: false, sourceId: card.sourceId };
+                    posterJobs.push(job);
+                    function finish(response) {
+                        if (job.done || token !== posterGeneration || !running || !current()) return;
+                        job.done = true;
+                        posterJobs = posterJobs.filter(function (entry) { return entry !== job; });
+                        var metadata = null;
+                        try { metadata = scheduleMetadata(response, card.sourceId); } catch (error) {}
+                        if (metadata) {
+                            scheduleCache = scheduleCache.filter(function (entry) { return entry.id !== card.sourceId && Date.now() - entry.time < 6 * 60 * 60 * 1000; });
+                            scheduleCache.push({ id: card.sourceId, time: Date.now(), metadata: metadata });
+                            if (scheduleCache.length > 100) scheduleCache.shift();
+                            schedule.forEach(function (day) { day.cards.forEach(function (entry) {
+                                if (entry.sourceId === card.sourceId) applyMetadata(entry, metadata);
+                            }); });
+                        }
+                        drainPosters();
+                    }
+                    try {
+                        job.network = new Lampa.Reguest();
+                        if (typeof job.network.timeout !== 'function' || typeof job.network.native !== 'function') { finish(null); return; }
+                        job.network.timeout(15000);
+                        job.network.native('https://api.animetop.info/v1/search', finish, function () { finish(null); },
+                            'name=' + encodeURIComponent(card.title), { dataType: 'text' });
+                    } catch (error) { finish(null); }
+                }(posterQueue.shift()));
+            }
+        }
+
+        function requestVisiblePosters(focusedKey) {
+            if (!running || !current() || !loaded || mode !== 'schedule') return;
+            var focusedDay = days.map(function (day) { return day[0]; }).filter(function (day) {
+                return focusedKey.indexOf(day + '-') === 0 || focusedKey === 'day-' + day;
+            })[0];
+            // Scroll may still be animating: prioritize the selected day, not old viewport rectangles.
+            if (focusedDay) posterQueue = posterQueue.filter(function (card) {
+                if (card.key.indexOf(focusedDay + '-') === 0) return true;
+                delete posterAttempted[card.key];
+                return false;
+            });
+            var candidates = [];
+            schedule.forEach(function (day) { day.cards.forEach(function (card) {
+                if (!card.sourceId || card.poster || posterAttempted[card.key]) return;
+                var item = posterNodes[card.key] && posterNodes[card.key][0];
+                if (!item) return;
+                var rect = item.getBoundingClientRect();
+                if ((focusedDay && day.key === focusedDay) || (!focusedDay && rect.bottom >= 0 && rect.top <= root.innerHeight && rect.right >= 0 && rect.left <= root.innerWidth)) candidates.push(card);
+            }); });
+            candidates.sort(function (a, b) { return a.key === focusedKey ? -1 : b.key === focusedKey ? 1 : 0; });
+            candidates.forEach(function (card) {
+                var cached = scheduleCache.filter(function (entry) { return entry.id === card.sourceId && Date.now() - entry.time < 6 * 60 * 60 * 1000; })[0];
+                if (cached) applyMetadata(card, cached.metadata);
+                else {
+                    posterAttempted[card.key] = true;
+                    if (!posterJobs.some(function (job) { return job.sourceId === card.sourceId; }) && !posterQueue.some(function (entry) { return entry.sourceId === card.sourceId; })) posterQueue.push(card);
+                }
+            });
+            var focusedIndex = posterQueue.map(function (card) { return card.key; }).indexOf(focusedKey);
+            if (focusedIndex > 0) posterQueue.unshift(posterQueue.splice(focusedIndex, 1)[0]);
+            drainPosters();
         }
 
         function render() {
             if (destroyed) return;
+            posterNodes = {};
             body.empty();
             var title = mode === 'home' ? 'Animevost' : mode === 'updates' ? 'Последние обновления' : mode === 'match' ? 'Карточка Lampa' : 'Расписание';
             body.append($('<h2 class="animevost__heading"></h2>').text(title));
@@ -487,19 +636,23 @@
                 addAction('configure', 'Настроить расписание', 'Адрес собственного HTTPS Worker · ' + version, configure);
             } else {
                 if (mode === 'schedule') {
-                    body.append($('<p class="animevost__note"></p>').text('Примерное время выхода русской озвучки, МСК. Возможны переносы.'));
-                    if (loaded && !chosenDay) {
-                        schedule.forEach(function (day) {
-                            addAction('day-' + day.key, day.title, day.cards.length ? day.cards.length + ' в расписании' : 'В расписании нет записей',
-                                function () { push('schedule', 'Animevost — ' + day.title, day.key); }, true);
-                        });
-                    } else if (loaded) {
-                        var day = schedule.filter(function (entry) { return entry.key === chosenDay; })[0];
-                        if (day) {
-                            body.append($('<h3 class="animevost__day"></h3>').text(day.title));
-                            day.cards.forEach(addCard);
-                            if (!day.cards.length) body.append($('<p class="animevost__note"></p>').text('На этот день записей нет.'));
+                    body.append($('<p class="animevost__note"></p>').text('Расписание по МСК. Подсветка означает, что время по расписанию прошло, а не подтверждение выхода серии. Возможны переносы.'));
+                    if (loaded) {
+                        var clock = moscowClock(weekNow);
+                        if (!scheduleInitialDone) {
+                            var todayKey = preferredDay || days[clock ? clock.dayIndex : 0][0];
+                            var today = schedule.filter(function (day) { return day.key === todayKey; })[0];
+                            lastKey = today && today.cards.length ? today.cards[0].key : 'day-' + todayKey;
+                            scheduleInitialDone = true;
                         }
+                        schedule.forEach(function (day) {
+                            var today = clock && day.key === days[clock.dayIndex][0];
+                            body.append($('<h3 class="animevost__day"></h3>').toggleClass('animevost__day--today', !!today).text(day.title + (today ? ' · Сегодня' : '')));
+                            var grid = $('<div class="animevost__grid"></div>');
+                            body.append(grid);
+                            day.cards.forEach(function (card) { addCard(card, grid, day.key); });
+                            if (!day.cards.length) addAction('day-' + day.key, 'На этот день записей нет', day.title, function () {});
+                        });
                     }
                 } else {
                     cards.forEach(addCard);
@@ -520,6 +673,7 @@
         }
 
         function cancel() {
+            stopPosters();
             generation++;
             if (cancelResolve) { cancelResolve(); cancelResolve = null; }
             try { network.clear(); } catch (error) {} // Callback invalidation, not transport abort.
@@ -581,12 +735,16 @@
         };
         this.start = function () {
             if (!current()) return;
+            running = true;
+            weekNow = Date.now();
             if (mode === 'schedule') {
                 var selectedProxy = proxyAddress(Lampa.Storage.get(storageKey, ''));
                 if (selectedProxy !== loadedProxy) {
                     cancel();
                     loadedProxy = selectedProxy;
                     loaded = false;
+                    scheduleInitialDone = false;
+                    posterAttempted = {};
                     schedule = [];
                     errorText = '';
                     render();
@@ -602,23 +760,26 @@
                 back: function () { Lampa.Activity.backward(); }
             });
             Lampa.Controller.toggle('content');
+            if (mode === 'schedule' && loaded) render();
             if (!loaded && !busy && mode !== 'home' && !errorText) {
                 if (mode === 'match') loadMatch();
                 else load();
             }
         };
-        this.pause = function () { cancel(); render(); };
-        this.stop = function () { cancel(); render(); };
+        this.pause = function () { running = false; cancel(); posterAttempted = {}; render(); };
+        this.stop = function () { running = false; cancel(); posterAttempted = {}; render(); };
         this.render = function () { return html; };
         this.destroy = function () {
             if (destroyed) return;
             destroyed = true;
+            running = false;
             cancel();
             releaseDetail(false);
             scroll.destroy();
             html.remove();
             cards = [];
             schedule = [];
+            posterNodes = {};
             matches = [];
             sourceCard = {};
         };
@@ -644,7 +805,10 @@
                     '.animevost__meta{opacity:.75;line-height:1.4;margin-top:.45em;max-height:2.8em;overflow:hidden;overflow-wrap:break-word;word-wrap:break-word}' +
                     '.animevost__card{display:flex;align-items:center;gap:1em}.animevost__card-body{min-width:0;flex:1}' +
                     '.animevost__poster{position:relative;width:5em;height:7.5em;flex:0 0 5em;display:flex;align-items:center;justify-content:center;text-align:center;background:rgba(0,0,0,.25);margin-right:1em;overflow:hidden;border-radius:.35em}' +
-                    '.animevost__poster span{font-size:.7em;opacity:.6}.animevost__poster img{position:absolute;width:100%;height:100%;object-fit:cover;left:0;top:0}.animevost__card--schedule .animevost__poster{display:none}' +
+                    '.animevost__poster span{font-size:.7em;opacity:.6}.animevost__poster img{position:absolute;width:100%;height:100%;object-fit:cover;left:0;top:0}' +
+                    '.animevost__grid{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:1.5em}.animevost__grid .animevost__card{display:block;flex:0 0 calc(16.666% - 10px);min-width:0;margin:0;padding:.6em}.animevost__grid .animevost__poster{width:100%;height:12em;margin:0 0 .65em;box-sizing:border-box}.animevost__grid .animevost__title{font-size:1em}.animevost__grid .animevost__meta{font-size:.85em}.animevost__card--elapsed{background:rgba(94,185,133,.12)}.animevost__badge{font-size:.7em;line-height:1.3;color:#98e8b0;margin-top:.6em}.animevost__day--today{color:#ffbe69}' +
+                    '@media(max-width:1280px){.animevost__grid .animevost__card{flex-basis:calc(20% - 10px)}}@media(max-width:800px){.animevost__grid .animevost__card{flex-basis:calc(25% - 9px)}}@media(max-width:480px){.animevost__grid .animevost__card{flex-basis:calc(50% - 6px)}.animevost__grid .animevost__poster{height:6em}}' +
+                    '@media(max-height:300px){.animevost__grid .animevost__card{padding:.35em}.animevost__grid .animevost__poster{height:2em;margin-bottom:.3em}.animevost__grid .animevost__title{-webkit-line-clamp:2;max-height:2.6em}.animevost__grid .animevost__meta{font-size:.75em;max-height:1.4em;margin-top:.2em}.animevost__badge{font-size:.65em;line-height:1.2;max-height:2.4em;overflow:hidden;margin-top:.3em}}' +
                     '.animevost__error{color:#ffce97}.animevost__note,.animevost__status,.animevost__error{line-height:1.5;margin:0 0 1em;overflow-wrap:break-word}' +
                     '.animevost__detail-title{font-size:1.25em;line-height:1.4}.animevost__detail-info{margin:1em 0;opacity:.8}.animevost__description{white-space:pre-wrap;line-height:1.5}.animevost__detail{overflow-wrap:break-word;word-wrap:break-word}' +
                     '@media(max-width:480px){.animevost__body{padding:.5em .5em 2em}.animevost__poster{width:3em;height:4.5em;flex-basis:3em}.animevost__action,.animevost__card{padding:.6em}.animevost__title{font-size:1em}}'
@@ -673,7 +837,8 @@
     }
 
     return { version: version, text: text, safeUrl: safeUrl, proxyAddress: proxyAddress,
-        parseFeed: parseFeed, parseSchedule: parseSchedule, searchNames: searchNames, parseMatches: parseMatches,
+        parseFeed: parseFeed, parseSchedule: parseSchedule, scheduleMinutes: scheduleMinutes, sortScheduleCards: sortScheduleCards,
+        moscowClock: moscowClock, scheduleElapsed: scheduleElapsed, scheduleMetadata: scheduleMetadata, searchNames: searchNames, parseMatches: parseMatches,
         automaticMatch: automaticMatch, resolveCard: resolveCard, supported: supported, Component: Component, install: install };
 }));
 
