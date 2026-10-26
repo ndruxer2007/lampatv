@@ -13,7 +13,7 @@
 }(typeof window !== 'undefined' ? window : globalThis, function (root) {
     'use strict';
 
-    var version = '0.3.0';
+    var version = '0.3.1';
     var storageKey = 'animevost_schedule_proxy';
     var apiUrl = 'https://api.animetop.info/v1/last';
     var days = [
@@ -46,6 +46,17 @@
         } catch (error) { return ''; }
     }
 
+    function posterUrl(value) {
+        var address = safeUrl(value);
+        if (!address) return '';
+        var url = new root.URL(address);
+        // The API CDN has an expired certificate; the source serves these same paths over valid HTTPS.
+        if (url.hostname === 'static.openni.ru' && !url.port && url.pathname.indexOf('/uploads/posts/') === 0) {
+            url.hostname = 'animevost.org';
+        }
+        return url.href;
+    }
+
     function proxyAddress(value) {
         var url = safeUrl(value);
         // The endpoint is a fixed route, not an open-proxy URL with query parameters.
@@ -74,7 +85,7 @@
                 media: item.type === 'ТВ' ? 'tv' : '',
                 info: labels.join(' · ') || 'Сведения о сериях не указаны',
                 description: text(item.description),
-                poster: safeUrl(item.urlImagePreview)
+                poster: posterUrl(item.urlImagePreview)
             };
         });
         return { cards: cards, hasNext: cards.length === 10 && page * 10 < Number(json.state.count) };
@@ -150,7 +161,7 @@
         var item = json.data.filter(function (entry) { return entry && /^\d+$/.test(String(entry.id)) && Number(entry.id) <= 9007199254740991 && Number(entry.id) === Number(sourceId); })[0];
         if (!item) return null;
         var fullTitle = text(item.title);
-        return { poster: safeUrl(item.urlImagePreview), originalTitle: (fullTitle.split(' / ')[1] || '').replace(/\s*\[[^\]]*\]/g, '').trim(),
+        return { poster: posterUrl(item.urlImagePreview), originalTitle: (fullTitle.split(' / ')[1] || '').replace(/\s*\[[^\]]*\]/g, '').trim(),
             year: /^\d{4}$/.test(String(item.year || '')) ? String(item.year) : '', media: item.type === 'ТВ' ? 'tv' : '' };
     }
 
